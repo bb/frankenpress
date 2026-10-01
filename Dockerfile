@@ -25,6 +25,8 @@
 ARG WORDPRESS_VERSION=latest
 ARG PHP_VERSION=8.5
 ARG DEBIAN_VERSION=trixie
+# FrankenPHP major version; minor/patch (and PHP patch) updates are picked up on rebuild
+ARG FRANKENPHP_VERSION=1
 
 # -----------------------------------------------------------------------------
 # Stage 1: WordPress Source Files
@@ -36,9 +38,12 @@ FROM wordpress:$WORDPRESS_VERSION AS wp
 # -----------------------------------------------------------------------------
 # Stage 2: Standard FrankenPress Image
 # -----------------------------------------------------------------------------
-# Base image uses custom FrankenPHP builds from ghcr.io/notglossy/frankenpress-src
-# Format: php{VERSION}-{DEBIAN_VERSION} (multi-arch)
-FROM ghcr.io/notglossy/frankenpress-src:php${PHP_VERSION}-${DEBIAN_VERSION} AS standard
+# Base image is the official FrankenPHP image, which is rebuilt for every PHP
+# release and already ships the Vulcain and Brotli Caddy modules, the file
+# watcher library and install-php-extensions.
+# Format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_VERSION} (multi-arch)
+# See: https://hub.docker.com/r/dunglas/frankenphp
+FROM dunglas/frankenphp:${FRANKENPHP_VERSION}-php${PHP_VERSION}-${DEBIAN_VERSION} AS standard
 
 # -----------------------------------------------------------------------------
 # Metadata Labels
