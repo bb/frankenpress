@@ -1,0 +1,16 @@
+# Weekly pull requests that bump the commit-pinned GitHub Actions.
+#
+# The Dockerfile's base images are deliberately not managed here: they use
+# floating tags (dunglas/frankenphp:1-php8.5-trixie, wordpress:latest) built
+# from ARGs, so the weekly scheduled rebuild picks up their updates instead.
+# WP-CLI and the VIPS plugin are pinned with checksums in the Dockerfile and
+# need a manual bump.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]

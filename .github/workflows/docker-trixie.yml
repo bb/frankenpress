@@ -8,12 +8,14 @@ on:
       - 'Dockerfile'
       - 'Caddyfile'
       - 'php.ini'
+      - 'imagemagick-policy.xml'
       - '.github/workflows/docker-trixie.yml'
   pull_request:
     paths:
       - 'Dockerfile'
       - 'Caddyfile'
       - 'php.ini'
+      - 'imagemagick-policy.xml'
       - '.github/workflows/docker-trixie.yml'
   schedule:
     - cron: "0 1 * * 0" # Every Sunday at 1 AM UTC
@@ -49,23 +51,23 @@ jobs:
       ARCH_TAG: php-${{ matrix.php-version }}${{ matrix.variant != 'standard' && format('-{0}', matrix.variant) || '' }}-trixie-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
       CACHE_SCOPE: ${{ matrix.platform }}-${{ matrix.php-version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # PR builds only pull public images and never push, so they skip the
       # logins; secrets aren't available to PRs from forks anyway.
       - name: Login to Docker Hub
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -73,7 +75,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: |
             ${{ env.DOCKERHUB_IMAGE }}
@@ -88,7 +90,7 @@ jobs:
             latest=false
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           platforms: ${{ matrix.platform }}
           context: .
@@ -137,6 +139,36 @@ jobs:
             run ls /usr/src/wordpress/wp-content/plugins | grep vips-image-editor-ffi
           fi
 
+      # Report-only: lists HIGH/CRITICAL vulnerabilities in the job summary and
+      # never fails the build. Trivy runs from its official image pinned by
+      # digest rather than via aquasecurity/trivy-action, whose tags were
+      # hijacked in 2026 (CVE-2026-33634).
+      - name: Vulnerability scan (Trivy)
+        if: matrix.platform == 'linux/amd64'
+        continue-on-error: true
+        env:
+          IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+          TRIVY: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+        run: |
+          set -euo pipefail
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" "$TRIVY" \
+            image --quiet --scanners vuln --severity HIGH,CRITICAL --format json --output /out/trivy.json "$IMAGE"
+          summary=$(jq -r '[.Results[]?.Vulnerabilities[]?] as $v
+            | "critical=\($v | map(select(.Severity == "CRITICAL")) | length)"
+            + " high=\($v | map(select(.Severity == "HIGH")) | length)"
+            + " fixable=\($v | map(select((.FixedVersion // "") != "")) | length)"' trivy.json)
+          echo "::notice title=Trivy ($ARCH_TAG)::$summary"
+          {
+            echo "### Trivy: \`$IMAGE\`"
+            echo "$summary"
+            echo
+            echo "| Severity | Vulnerability | Package | Installed | Fixed in |"
+            echo "|---|---|---|---|---|"
+            jq -r '[.Results[]?.Vulnerabilities[]?] | unique_by(.VulnerabilityID + .PkgName)
+              | sort_by(if .Severity == "CRITICAL" then 0 else 1 end, .PkgName)[]
+              | "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "") |"' trivy.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
   create-manifests:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -150,16 +182,16 @@ jobs:
       SUFFIX: ${{ matrix.variant != 'standard' && format('{0}-', matrix.variant) || '' }}trixie
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -178,3 +210,18 @@ jobs:
             docker buildx imagetools create "${tags[@]}" "$repo:$tag-amd64" "$repo:$tag-arm64"
             docker buildx imagetools inspect "$repo:$tag"
           done
+
+  # GitHub disables scheduled workflows after 60 days without repository
+  # activity, which silently stops the weekly rebuilds that pick up PHP and
+  # base image fixes (this is what froze notglossy/frankenpress-src).
+  # Re-enabling the workflow through the API resets that timer.
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Reset the inactivity timer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/docker-trixie.yml/enable"
