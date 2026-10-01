@@ -23,16 +23,31 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DOCKERHUB_IMAGE: bock/frankenpress
+  # PHP version that receives the unversioned tags (latest, trixie, vips-ffi, ...).
+  # Keep in sync with the php-version lists below and PHP_VERSION in the Dockerfile.
+  LATEST_PHP: '8.5'
+
 jobs:
   build:
     runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-latest' || 'ubuntu-24.04-arm' }}
     strategy:
       matrix:
-        # Only build PHP 8.4 and 8.5 for PRs to speed up CI, build all versions for main branch
-        php-version: ${{ github.event_name == 'pull_request' && fromJSON('[8.4, 8.5]') || fromJSON('[8.2, 8.3, 8.4, 8.5]') }}
-        # Split platforms to use native runners (amd64 on x64, arm64 on ARM)
+        php-version: ['8.5']
+        # Dockerfile targets; the tag suffix is derived from the variant name
+        variant: [standard, vips-ffi]
+        # Split platforms to use native runners (amd64 on x64, arm64 on ARM); PRs build amd64 only
         platform: ${{ github.event_name == 'pull_request' && fromJSON('["linux/amd64"]') || fromJSON('["linux/amd64", "linux/arm64"]') }}
       fail-fast: false
+    env:
+      # e.g. php-8.5-trixie-amd64 or php-8.5-vips-ffi-trixie-arm64
+      ARCH_TAG: php-${{ matrix.php-version }}${{ matrix.variant != 'standard' && format('-{0}', matrix.variant) || '' }}-trixie-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+      CACHE_SCOPE: ${{ matrix.platform }}-${{ matrix.php-version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -57,13 +72,13 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: |
-            notglossy/frankenpress
+            ${{ env.DOCKERHUB_IMAGE }}
             ghcr.io/${{ github.repository_owner }}/frankenpress
           tags: |
-            type=raw,value=php-${{ matrix.php-version }}-trixie-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+            type=raw,value=${{ env.ARCH_TAG }}
           labels: |
-            org.opencontainers.image.title=FrankenPress (PHP ${{ matrix.php-version }} Trixie)
-            org.opencontainers.image.description=WordPress running on FrankenPHP with Debian Trixie
+            org.opencontainers.image.title=FrankenPress${{ matrix.variant == 'vips-ffi' && ' VIPS/FFI' || '' }} (PHP ${{ matrix.php-version }} Trixie)
+            org.opencontainers.image.description=WordPress${{ matrix.variant == 'vips-ffi' && ' with VIPS and FFI' || '' }} running on FrankenPHP with Debian Trixie
             org.opencontainers.image.licenses=MIT
           flavor: |
             latest=false
@@ -73,27 +88,50 @@ jobs:
         with:
           platforms: ${{ matrix.platform }}
           context: .
+          target: ${{ matrix.variant }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
+          # Each variant writes its own cache scope; vips-ffi also reads the standard
+          # scope so the shared base layers are reused.
           cache-from: |
-            type=gha,scope=${{ matrix.platform }}-${{ matrix.php-version }}
-            type=registry,ref=notglossy/frankenpress:php-${{ matrix.php-version }}-trixie-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}-${{ matrix.php-version }}
+            type=gha,scope=${{ env.CACHE_SCOPE }}-standard
+            type=gha,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
+            type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+          cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
           build-args: |
             PHP_VERSION=${{ matrix.php-version }}
             DEBIAN_VERSION=trixie
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: ${{ github.event_name != 'pull_request' }}
+          provenance: ${{ github.event_name != 'pull_request' && 'mode=max' || 'false' }}
           sbom: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name == 'pull_request' }}
 
       - name: Smoke test
         if: github.event_name == 'pull_request'
+        env:
+          IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
         run: |
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-trixie-amd64 php -v | grep "PHP ${{ matrix.php-version }}"
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-trixie-amd64 frankenphp version
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-trixie-amd64 wp --version
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-trixie-amd64 ls -la /usr/src/wordpress | grep wp-config-docker.php
+          set -euo pipefail
+          run() { docker run --rm "$IMAGE" "$@"; }
+
+          # Startup must be clean: a broken extension loader only shows up as a warning
+          out=$(run php -v 2>&1)
+          echo "$out"
+          grep -q "PHP ${{ matrix.php-version }}" <<<"$out"
+          if grep -qiE 'warning|unable to load' <<<"$out"; then
+            echo "::error::PHP startup produced warnings"; exit 1
+          fi
+
+          run php -m | grep -qx 'Zend OPcache'
+          run frankenphp version
+          run wp --version
+          run ls -la /usr/src/wordpress | grep wp-config-docker.php
+
+          if [ "${{ matrix.variant }}" = vips-ffi ]; then
+            run php -m | grep -qx FFI
+            run dpkg -l | grep libvips
+            run ls /usr/src/wordpress/wp-content/plugins | grep vips-image-editor-ffi
+          fi
 
   create-manifests:
     if: github.event_name != 'pull_request'
@@ -101,7 +139,11 @@ jobs:
     needs: [build]
     strategy:
       matrix:
-        php-version: [8.2, 8.3, 8.4, 8.5]
+        php-version: ['8.5']
+        variant: [standard, vips-ffi]
+    env:
+      # Tag suffix shared by both registries, e.g. "trixie" or "vips-ffi-trixie"
+      SUFFIX: ${{ matrix.variant != 'standard' && format('{0}-', matrix.variant) || '' }}trixie
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -119,26 +161,16 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create multi-arch manifest (Docker Hub)
+      - name: Create multi-arch manifests
         run: |
-          docker buildx imagetools create \
-            -t notglossy/frankenpress:php-${{ matrix.php-version }}-trixie \
-            ${{ matrix.php-version == 8.4 && '-t notglossy/frankenpress:trixie -t notglossy/frankenpress:latest' || '' }} \
-            notglossy/frankenpress:php-${{ matrix.php-version }}-trixie-amd64 \
-            notglossy/frankenpress:php-${{ matrix.php-version }}-trixie-arm64
-
-      - name: Create multi-arch manifest (GHCR)
-        run: |
-          docker buildx imagetools create \
-            -t ghcr.io/${{ github.repository_owner }}/frankenpress:php-${{ matrix.php-version }}-trixie \
-            ${{ matrix.php-version == 8.4 && format('-t ghcr.io/{0}/frankenpress:trixie -t ghcr.io/{0}/frankenpress:latest', github.repository_owner) || '' }} \
-            ghcr.io/${{ github.repository_owner }}/frankenpress:php-${{ matrix.php-version }}-trixie-amd64 \
-            ghcr.io/${{ github.repository_owner }}/frankenpress:php-${{ matrix.php-version }}-trixie-arm64
-
-      - name: Inspect image (Docker Hub)
-        run: |
-          docker buildx imagetools inspect notglossy/frankenpress:php-${{ matrix.php-version }}-trixie
-
-      - name: Inspect image (GHCR)
-        run: |
-          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/frankenpress:php-${{ matrix.php-version }}-trixie
+          set -euo pipefail
+          for repo in "${{ env.DOCKERHUB_IMAGE }}" "ghcr.io/${{ github.repository_owner }}/frankenpress"; do
+            tag="php-${{ matrix.php-version }}-$SUFFIX"
+            tags=(-t "$repo:$tag")
+            if [ "${{ matrix.php-version }}" = "$LATEST_PHP" ]; then
+              # standard: trixie + latest; vips-ffi: vips-ffi-trixie + vips-ffi
+              tags+=(-t "$repo:$SUFFIX" -t "$repo:${{ matrix.variant == 'standard' && 'latest' || matrix.variant }}")
+            fi
+            docker buildx imagetools create "${tags[@]}" "$repo:$tag-amd64" "$repo:$tag-arm64"
+            docker buildx imagetools inspect "$repo:$tag"
+          done

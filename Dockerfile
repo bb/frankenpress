@@ -10,17 +10,23 @@
 # - Minimal layers (better caching and smaller image size)
 # - Layer ordering based on change frequency (faster rebuilds)
 # - Security (runs as non-root user)
-# - Performance (OpCache, APCu, OPcache optimizations)
+# - Performance (OPcache, APCu, object cache extensions)
+#
+# Build targets:
+# - standard (default): WordPress on FrankenPHP
+# - vips-ffi: standard + libvips/FFI and the VIPS image editor plugin
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Build Arguments
 # -----------------------------------------------------------------------------
 # These can be overridden at build time using --build-arg
-# Example: docker build --build-arg PHP_VERSION=8.2 .
+# Example: docker build --build-arg PHP_VERSION=8.5 --target vips-ffi .
 ARG WORDPRESS_VERSION=latest
-ARG PHP_VERSION=8.4
+ARG PHP_VERSION=8.5
 ARG DEBIAN_VERSION=trixie
+# FrankenPHP major version; minor/patch (and PHP patch) updates are picked up on rebuild
+ARG FRANKENPHP_VERSION=1
 
 # -----------------------------------------------------------------------------
 # Stage 1: WordPress Source Files
@@ -30,11 +36,14 @@ ARG DEBIAN_VERSION=trixie
 FROM wordpress:$WORDPRESS_VERSION AS wp
 
 # -----------------------------------------------------------------------------
-# Stage 2: Final FrankenPress Image
+# Stage 2: Standard FrankenPress Image
 # -----------------------------------------------------------------------------
-# Base image uses custom FrankenPHP builds from ghcr.io/notglossy/frankenpress-src
-# Format: php{VERSION}-{DEBIAN_VERSION}-{ARCH}
-FROM ghcr.io/notglossy/frankenpress-src:php${PHP_VERSION}-${DEBIAN_VERSION} AS base
+# Base image is the official FrankenPHP image, which is rebuilt for every PHP
+# release and already ships the Vulcain and Brotli Caddy modules, the file
+# watcher library and install-php-extensions.
+# Format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_VERSION} (multi-arch)
+# See: https://hub.docker.com/r/dunglas/frankenphp
+FROM dunglas/frankenphp:${FRANKENPHP_VERSION}-php${PHP_VERSION}-${DEBIAN_VERSION} AS standard
 
 # -----------------------------------------------------------------------------
 # Metadata Labels
@@ -76,6 +85,8 @@ ENV FORCE_HTTPS=0 \
 # Build-only packages (removed after extensions are built):
 # - *-dev: Development headers needed to compile PHP extensions
 #
+# OPcache is not installed here: it is built into PHP 8.5 and always present.
+#
 # PHP extensions installed via install-php-extensions script:
 # - bcmath: Arbitrary precision mathematics (WooCommerce, etc.)
 # - exif: Image metadata extraction
@@ -84,7 +95,6 @@ ENV FORCE_HTTPS=0 \
 # - mysqli: MySQL database driver
 # - zip: Archive handling
 # - imagick: Advanced image processing (alternative to GD)
-# - opcache: Bytecode caching for performance
 # - memcached: Object caching backend
 # - apcu: In-memory user cache
 # - redis: Object caching and sessions
@@ -116,7 +126,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         mysqli \
         zip \
         imagick \
-        opcache \
         memcached \
         apcu \
         redis \
@@ -282,3 +291,40 @@ USER $USER_NAME
 # docker run -it frankenpress bash
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["frankenphp", "run", "--config", "/etc/caddy/Caddyfile"]
+
+# -----------------------------------------------------------------------------
+# Stage 3: VIPS/FFI Variant
+# -----------------------------------------------------------------------------
+# Adds libvips (with HEIF/AVIF support) and the FFI extension, plus the
+# vips-image-editor-ffi plugin so WordPress uses libvips for image processing.
+# Build with: docker build --target vips-ffi .
+FROM standard AS vips-ffi
+
+ARG USER_NAME=www-data
+
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libvips42 \
+        libheif1 \
+        libaom3 \
+        libheif-plugin-aomdec \
+        libheif-plugin-aomenc \
+    && install-php-extensions ffi \
+    && rm -rf /var/cache/apt/archives \
+        /var/lib/apt/lists/*
+
+ADD https://github.com/notglossy/vips-image-editor-ffi/releases/download/v3.1.0/vips-image-editor-ffi-3.1.0.zip /tmp/vips-image-editor-ffi.zip
+RUN unzip /tmp/vips-image-editor-ffi.zip -d /usr/src/wordpress/wp-content/plugins/ \
+    && rm -f /tmp/vips-image-editor-ffi.zip \
+    && chown -R ${USER_NAME}:${USER_NAME} /usr/src/wordpress/wp-content/plugins \
+    && echo 'zend.max_allowed_stack_size=-1' >> $PHP_INI_DIR/conf.d/stack-size.ini \
+    && echo 'ffi.enable=true' >> $PHP_INI_DIR/conf.d/docker-php-ext-ffi.ini
+
+USER $USER_NAME
+
+# -----------------------------------------------------------------------------
+# Default Target
+# -----------------------------------------------------------------------------
+# Keep the standard image as the default when no --target is given.
+FROM standard
