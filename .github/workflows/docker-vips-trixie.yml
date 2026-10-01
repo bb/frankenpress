@@ -25,6 +25,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DOCKERHUB_IMAGE: bock/frankenpress
+
 jobs:
   docker:
     runs-on: ubuntu-latest
@@ -59,7 +66,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: notglossy/frankenpress
+          images: ${{ env.DOCKERHUB_IMAGE }}
           labels: |
             org.opencontainers.image.title=FrankenPress VIPS/FFI (PHP ${{ matrix.php-version }} Trixie)
             org.opencontainers.image.description=WordPress with VIPS and FFI running on FrankenPHP with Debian Trixie
@@ -76,19 +83,20 @@ jobs:
           context: .
           file: ./Dockerfile.vips-ffi
           tags: |
-            notglossy/frankenpress:php-${{ matrix.php-version }}-vips-ffi-trixie
+            ${{ env.DOCKERHUB_IMAGE }}:php-${{ matrix.php-version }}-vips-ffi-trixie
             ghcr.io/${{ github.repository_owner }}/frankenpress:php-${{ matrix.php-version }}-vips-ffi-trixie
-            ${{ matrix.php-version == '8.4' && 'notglossy/frankenpress:vips-ffi-trixie' || '' }}
-            ${{ matrix.php-version == '8.4' && 'notglossy/frankenpress:vips-ffi' || '' }}
+            ${{ matrix.php-version == '8.4' && format('{0}:vips-ffi-trixie', env.DOCKERHUB_IMAGE) || '' }}
+            ${{ matrix.php-version == '8.4' && format('{0}:vips-ffi', env.DOCKERHUB_IMAGE) || '' }}
             ${{ matrix.php-version == '8.4' && format('ghcr.io/{0}/frankenpress:vips-ffi-trixie', github.repository_owner) || '' }}
             ${{ matrix.php-version == '8.4' && format('ghcr.io/{0}/frankenpress:vips-ffi', github.repository_owner) || '' }}
           cache-from: |
             type=gha
-            type=registry,ref=notglossy/frankenpress:php-${{ matrix.php-version }}-vips-ffi-trixie
+            type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:php-${{ matrix.php-version }}-vips-ffi-trixie
           cache-to: type=gha,mode=max
           build-args: |
             PHP_VERSION=${{ matrix.php-version }}
             DEBIAN_VERSION=trixie
+            BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/frankenpress
           labels: ${{ steps.meta.outputs.labels }}
           provenance: ${{ github.event_name != 'pull_request' && 'mode=max' || 'false' }}
           sbom: ${{ github.event_name != 'pull_request' }}
@@ -97,9 +105,9 @@ jobs:
       - name: Smoke test
         if: github.event_name == 'pull_request'
         run: |
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-vips-ffi-trixie php -v | grep "PHP ${{ matrix.php-version }}"
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-vips-ffi-trixie php -m | grep FFI
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-vips-ffi-trixie frankenphp version
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-vips-ffi-trixie wp --version
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-vips-ffi-trixie ls -la /usr/src/wordpress | grep wp-config-docker.php
-          docker run --rm notglossy/frankenpress:php-${{ matrix.php-version }}-vips-ffi-trixie dpkg -l | grep libvips
+          docker run --rm ${{ env.DOCKERHUB_IMAGE }}:php-${{ matrix.php-version }}-vips-ffi-trixie php -v | grep "PHP ${{ matrix.php-version }}"
+          docker run --rm ${{ env.DOCKERHUB_IMAGE }}:php-${{ matrix.php-version }}-vips-ffi-trixie php -m | grep FFI
+          docker run --rm ${{ env.DOCKERHUB_IMAGE }}:php-${{ matrix.php-version }}-vips-ffi-trixie frankenphp version
+          docker run --rm ${{ env.DOCKERHUB_IMAGE }}:php-${{ matrix.php-version }}-vips-ffi-trixie wp --version
+          docker run --rm ${{ env.DOCKERHUB_IMAGE }}:php-${{ matrix.php-version }}-vips-ffi-trixie ls -la /usr/src/wordpress | grep wp-config-docker.php
+          docker run --rm ${{ env.DOCKERHUB_IMAGE }}:php-${{ matrix.php-version }}-vips-ffi-trixie dpkg -l | grep libvips

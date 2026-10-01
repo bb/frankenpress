@@ -2,10 +2,12 @@
 ARG WORDPRESS_VERSION=latest
 ARG PHP_VERSION=8.4
 ARG DEBIAN_VERSION=trixie
+# Published FrankenPress image to extend (override to build on a fork's images)
+ARG BASE_IMAGE=ghcr.io/notglossy/frankenpress
 
 
 # First stage: builder - used to build FrankenPHP with custom modules
-FROM ghcr.io/notglossy/frankenpress:php-${PHP_VERSION}-${DEBIAN_VERSION}
+FROM ${BASE_IMAGE}:php-${PHP_VERSION}-${DEBIAN_VERSION}
 
 USER root
 

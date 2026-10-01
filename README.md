@@ -11,22 +11,22 @@ docker run -d \
   -e DB_USER=wordpress \
   -e DB_PASSWORD=your-password \
   -e DB_NAME=wordpress \
-  notglossy/frankenpress:latest
+  bock/frankenpress:latest
 ```
 
 ## Available Images
 
 ### Standard Images
-- `notglossy/frankenpress:latest` - Latest (PHP 8.4) on Debian Trixie (amd64, arm64)
-- `notglossy/frankenpress:php-8.5-trixie` - PHP 8.5 on Debian Trixie (amd64, arm64)
-- `notglossy/frankenpress:php-8.4-trixie` - PHP 8.4 on Debian Trixie (amd64, arm64)
-- `notglossy/frankenpress:php-8.3-trixie` - PHP 8.3 on Debian Trixie (amd64, arm64)
-- `notglossy/frankenpress:php-8.2-trixie` - PHP 8.2 on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:latest` - Latest (PHP 8.4) on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:php-8.5-trixie` - PHP 8.5 on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:php-8.4-trixie` - PHP 8.4 on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:php-8.3-trixie` - PHP 8.3 on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:php-8.2-trixie` - PHP 8.2 on Debian Trixie (amd64, arm64)
 
 ### VIPS Images (with FFI support for advanced image processing)
-- `notglossy/frankenpress:vips-ffi` - Latest VIPS (PHP 8.4) on Debian Trixie (amd64, arm64)
-- `notglossy/frankenpress:php-8.5-vips-ffi-trixie` - PHP 8.5 VIPS on Debian Trixie (amd64, arm64)
-- `notglossy/frankenpress:php-8.4-vips-ffi-trixie` - PHP 8.4 VIPS on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:vips-ffi` - Latest VIPS (PHP 8.4) on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:php-8.5-vips-ffi-trixie` - PHP 8.5 VIPS on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:php-8.4-vips-ffi-trixie` - PHP 8.4 VIPS on Debian Trixie (amd64, arm64)
 
 All images are built on Debian 13 (Trixie). Debian Bookworm and 32-bit ARM (arm/v7) images are no longer built.
 
@@ -36,8 +36,8 @@ Standard image arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.
 
 ## Links
 
-- [Docker Hub](https://hub.docker.com/r/notglossy/frankenpress)
-- [GitHub Repository](https://github.com/notglossy/frankenpress)
+- [Docker Hub](https://hub.docker.com/r/bock/frankenpress)
+- [GitHub Repository](https://github.com/bb/frankenpress)
 
 ## What's Included
 
