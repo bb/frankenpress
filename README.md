@@ -90,7 +90,7 @@ All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) fo
 
 - **No PHP from uploads:** `.php`, `.phtml`, `.phar` and similar files under `wp-content/uploads` return 404, so a vulnerable upload form can't become remote code execution.
 - **No private files:** hidden files and folders (`.git`, `.env`, `.htaccess`, …) and backup or log files (`*.bak`, `*.sql`, `*.log`, …) return 404. `/.well-known/` is still served.
-- **Restricted image formats:** Imagick only handles GIF, JPEG, PNG, WebP, AVIF and HEIC, plus reading PDFs for thumbnails. PostScript, SVG and ImageMagick's other formats are refused, which keeps uploads away from rarely audited parsers.
+- **Restricted image formats:** Imagick only handles GIF, JPEG, PNG, WebP, AVIF and HEIC, plus reading PDFs for thumbnails. PostScript, SVG and ImageMagick's other formats are refused, which keeps uploads away from rarely audited parsers. In the VIPS images, `VIPS_BLOCK_UNTRUSTED=1` likewise limits libvips to its well-audited loaders, so its PDF, SVG and ImageMagick loaders are off (PDF thumbnails still come from Imagick).
 - **Security headers:** `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options` are added unless WordPress already sent them.
 - **Verified downloads:** WP-CLI and the VIPS plugin are pinned to releases and checked against their published checksums.
 - **WordPress core is writable by the web server user:** dashboard updates need this. Existing sites keep the WordPress version in their `/var/www/html` volume and update through WordPress itself; pulling a newer image doesn't change it.
