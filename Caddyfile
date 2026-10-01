@@ -1,5 +1,6 @@
 {
-	local_certs
+	# Real hostnames get publicly trusted certificates (Let's Encrypt/ZeroSSL);
+	# localhost and IP addresses automatically use Caddy's local CA.
 	auto_https disable_redirects # This is required to avoid redirect loops when using a reverse proxy and cloud load balancers.
 	{$CADDY_GLOBAL_OPTIONS}
 
@@ -19,9 +20,31 @@
 # You may not have the hostname being called due to dynamic IPs and load balancers.
 # Allowing all hosts on port 80 for health checks, local dev & cases where the hostname is unknown.
 {$SERVER_NAME:localhost} {
+	# Never run PHP from writable upload folders, including the
+	# /evil.php/extra path-info trick. Turns an upload bug into a 404
+	# instead of remote code execution.
+	@uploaded_php path_regexp (?i)^/wp-content/uploads/.*\.(php\d*|phtml|phar|pht|phps)(/|$)
+
+	# Hidden files (.git, .env, .htaccess, ...) and backups/logs left in the web root
+	@sensitive {
+		path_regexp sensitive (?i)/\.[^/]|\.(bak|old|orig|save|swp|swo|tmp|sql|sql\.gz|log)$
+		not path /.well-known/*
+	}
+
+	respond @uploaded_php 404
+	respond @sensitive 404
+
 	@static {
 		file
-		path *.ico *.css *.js *.gif *.jpg *.jpeg *.png *.svg *.woff
+		path *.ico *.css *.js *.gif *.jpg *.jpeg *.png *.webp *.avif *.svg *.woff *.woff2 *.ttf
+	}
+	header @static Cache-Control "public, max-age=2592000"
+
+	# "?" only sets a header when WordPress hasn't sent one itself
+	header {
+		?X-Content-Type-Options nosniff
+		?Referrer-Policy strict-origin-when-cross-origin
+		?X-Frame-Options SAMEORIGIN
 	}
 
 	root * /var/www/html/
