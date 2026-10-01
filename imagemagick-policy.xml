@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ImageMagick security policy for FrankenPress.
+
+  Deny every coder and delegate, then allow only the formats WordPress needs:
+  - read/write: the web image formats WordPress generates and serves
+  - read only:  PDF, so WordPress can render a thumbnail of uploaded PDFs
+
+  This keeps uploads from reaching ImageMagick's many less-audited coders
+  (PS, EPS, XPS, MVG, MSL, SVG, TEXT, ...) and blocks URL fetches.
+  Resource limits match Debian's defaults.
+  See: https://imagemagick.org/script/security-policy.php
+-->
+<policymap>
+  <policy domain="Undefined" rights="none"/>
+
+  <policy domain="resource" name="memory" value="1024MiB"/>
+  <policy domain="resource" name="map" value="2048MiB"/>
+  <policy domain="resource" name="area" value="256MP"/>
+  <policy domain="resource" name="disk" value="2GiB"/>
+  <policy domain="resource" name="width" value="32KP"/>
+  <policy domain="resource" name="height" value="32KP"/>
+
+  <!-- No indirect reads (@file) and no external programs, except Ghostscript
+       for PDF thumbnails; PS/EPS stay blocked as coders below, so PDF is the
+       only way to reach it -->
+  <policy domain="path" rights="none" pattern="@*"/>
+  <policy domain="delegate" rights="none" pattern="*"/>
+  <policy domain="delegate" rights="execute" pattern="gs"/>
+
+  <policy domain="coder" rights="none" pattern="*"/>
+  <policy domain="coder" rights="read|write" pattern="{GIF,JPEG,JPG,PNG,WEBP,AVIF,HEIC,HEIF}"/>
+  <policy domain="coder" rights="read" pattern="PDF"/>
+</policymap>

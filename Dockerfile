@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # =============================================================================
 # FrankenPress - Optimized WordPress Docker Image
 # =============================================================================
@@ -75,15 +76,12 @@ ENV FORCE_HTTPS=0 \
 #
 # Runtime packages (kept in final image):
 # - ca-certificates: SSL/TLS certificate validation
-# - ghostscript: PDF generation and manipulation
-# - curl: HTTP client for WP-CLI and downloads
-# - unzip: Archive extraction
-# - git: Version control (useful for plugin/theme development)
+# - ghostscript: lets Imagick render thumbnails of uploaded PDFs
+# - curl: HTTP client for WP-CLI and the healthcheck
 # - libcap2-bin: Provides setcap utility for granting capabilities
-# - lib* (non-dev): Runtime libraries for PHP extensions
 #
-# Build-only packages (removed after extensions are built):
-# - *-dev: Development headers needed to compile PHP extensions
+# install-php-extensions installs each extension's build dependencies itself
+# and removes them again, keeping only the runtime libraries.
 #
 # OPcache is not installed here: it is built into PHP 8.5 and always present.
 #
@@ -105,19 +103,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     ghostscript \
     curl \
-    unzip \
-    git \
     libcap2-bin \
-    # Build dependencies (will be removed later)
-    libonig-dev \
-    libxml2-dev \
-    libcurl4-openssl-dev \
-    libssl-dev \
-    libnss3-tools \
-    libzip-dev \
-    libjpeg-dev \
-    libwebp-dev \
-    zlib1g-dev \
     && install-php-extensions \
         bcmath \
         exif \
@@ -131,16 +117,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         redis \
         igbinary \
         msgpack \
-    # Remove build dependencies to reduce image size
-    && apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \
-        libonig-dev \
-        libxml2-dev \
-        libcurl4-openssl-dev \
-        libssl-dev \
-        libzip-dev \
-        libjpeg-dev \
-        libwebp-dev \
-        zlib1g-dev \
     # Clean up additional bloat
     && rm -rf /var/lib/apt/lists/* \
         /tmp/* \
@@ -155,9 +131,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # 1. Base PHP.ini: Start with production-recommended settings
 # 2. OpCache settings: Configure bytecode caching for performance
-#    - memory_consumption: 128MB for caching compiled scripts
-#    - interned_strings_buffer: 8MB for string interning
-#    - max_accelerated_files: Cache up to 4000 files
+#    - memory_consumption: 256MB for caching compiled scripts
+#    - interned_strings_buffer: 16MB for string interning
+#    - max_accelerated_files: Cache up to 20000 files (core alone has ~1500;
+#      WooCommerce and page builders add thousands more)
 #    - revalidate_freq: Check for changes every 2 seconds
 #    See: https://www.php.net/manual/en/opcache.configuration.php
 #
@@ -170,9 +147,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 4. Security: Hide PHP version from HTTP headers
 RUN cp $PHP_INI_DIR/php.ini-production $PHP_INI_DIR/php.ini \
     && { \
-        echo 'opcache.memory_consumption=128'; \
-        echo 'opcache.interned_strings_buffer=8'; \
-        echo 'opcache.max_accelerated_files=4000'; \
+        echo 'opcache.memory_consumption=256'; \
+        echo 'opcache.interned_strings_buffer=16'; \
+        echo 'opcache.max_accelerated_files=20000'; \
         echo 'opcache.revalidate_freq=2'; \
     } > $PHP_INI_DIR/conf.d/opcache-recommended.ini \
     && { \
@@ -181,7 +158,6 @@ RUN cp $PHP_INI_DIR/php.ini-production $PHP_INI_DIR/php.ini \
         echo 'display_startup_errors = Off'; \
         echo 'log_errors = On'; \
         echo 'error_log = /dev/stderr'; \
-        echo 'log_errors_max_len = 1024'; \
         echo 'ignore_repeated_errors = On'; \
         echo 'ignore_repeated_source = Off'; \
         echo 'html_errors = Off'; \
@@ -193,10 +169,42 @@ RUN cp $PHP_INI_DIR/php.ini-production $PHP_INI_DIR/php.ini \
 # -----------------------------------------------------------------------------
 # WordPress Command Line Interface for managing WordPress from the terminal.
 # Useful for plugin/theme management, database operations, and automation.
+# Pinned to a release and verified against its published SHA-512; update both
+# together from https://github.com/wp-cli/wp-cli/releases
 # See: https://wp-cli.org/
-RUN curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
-    && chmod +x wp-cli.phar \
-    && mv wp-cli.phar /usr/local/bin/wp
+ARG WP_CLI_VERSION=2.12.0
+ARG WP_CLI_SHA512=be928f6b8ca1e8dfb9d2f4b75a13aa4aee0896f8a9a0a1c45cd5d2c98605e6172e6d014dda2e27f88c98befc16c040cbb2bd1bfa121510ea5cdf5f6a30fe8832
+RUN curl -fsSL -o /usr/local/bin/wp \
+        "https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar" \
+    && echo "${WP_CLI_SHA512}  /usr/local/bin/wp" | sha512sum -c - \
+    && chmod +x /usr/local/bin/wp
+
+# -----------------------------------------------------------------------------
+# User and Permissions Setup
+# -----------------------------------------------------------------------------
+# Configure the container to run as a non-root user for security.
+# The user is created before the WordPress files are copied so they can be
+# copied with the right owner; a recursive chown afterwards would duplicate
+# all of WordPress into another layer.
+#
+# Steps:
+# 1. Create user if it doesn't exist (default: www-data)
+# 2. Grant FrankenPHP permission to bind to ports 80/443 without root
+# 3. Set ownership of the Caddy and web root directories
+#
+# NOTE: On some platforms (e.g., AWS ECS), volume mounts are owned by root.
+# You may need to use USER_NAME=root or modify the entrypoint to chown volumes.
+ARG USER_NAME=www-data
+
+RUN if id "${USER_NAME}" &>/dev/null; then \
+        echo "User ${USER_NAME} already exists"; \
+    else \
+        useradd -m ${USER_NAME}; \
+    fi \
+    && setcap CAP_NET_BIND_SERVICE=+eip /usr/local/bin/frankenphp \
+    && chown -R ${USER_NAME}:${USER_NAME} /data/caddy \
+        /config/caddy \
+        /var/www/html
 
 # -----------------------------------------------------------------------------
 # WordPress Core Files
@@ -209,8 +217,8 @@ RUN curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli
 # PHP configuration is deliberately NOT copied: the WordPress image is built
 # against a different PHP version, and its docker-php-ext-*.ini loaders break
 # extensions here (e.g. OPcache is built into PHP 8.5 and can't be loaded).
-COPY --from=wp /usr/src/wordpress /usr/src/wordpress
-COPY --from=wp /usr/local/bin/docker-entrypoint.sh /usr/local/bin/
+COPY --from=wp --chown=${USER_NAME}:${USER_NAME} /usr/src/wordpress /usr/src/wordpress
+COPY --from=wp --chown=${USER_NAME}:${USER_NAME} /usr/local/bin/docker-entrypoint.sh /usr/local/bin/
 
 # -----------------------------------------------------------------------------
 # WordPress and Entrypoint Customization
@@ -234,35 +242,10 @@ RUN sed -i \
 #
 # - php.ini: WordPress-specific PHP settings (upload size, execution time, etc.)
 # - Caddyfile: Caddy web server configuration (routing, headers, compression)
+# - imagemagick-policy.xml: limits Imagick to the formats WordPress needs
 COPY php.ini $PHP_INI_DIR/conf.d/wp.ini
 COPY Caddyfile /etc/caddy/Caddyfile
-
-# -----------------------------------------------------------------------------
-# User and Permissions Setup
-# -----------------------------------------------------------------------------
-# Configure the container to run as a non-root user for security.
-# This layer must come after all file copies to set proper ownership.
-#
-# Steps:
-# 1. Create user if it doesn't exist (default: www-data)
-# 2. Grant FrankenPHP permission to bind to ports 80/443 without root
-# 3. Set ownership of all WordPress and Caddy directories
-#
-# NOTE: On some platforms (e.g., AWS ECS), volume mounts are owned by root.
-# You may need to use USER_NAME=root or modify the entrypoint to chown volumes.
-ARG USER_NAME=www-data
-
-RUN if id "${USER_NAME}" &>/dev/null; then \
-        echo "User ${USER_NAME} already exists"; \
-    else \
-        useradd -m ${USER_NAME}; \
-    fi \
-    && setcap CAP_NET_BIND_SERVICE=+eip /usr/local/bin/frankenphp \
-    && chown -R ${USER_NAME}:${USER_NAME} /data/caddy \
-        /config/caddy \
-        /var/www/html \
-        /usr/src/wordpress \
-        /usr/local/bin/docker-entrypoint.sh
+COPY imagemagick-policy.xml /etc/ImageMagick-7/policy.xml
 
 # -----------------------------------------------------------------------------
 # Container Runtime Configuration
@@ -314,8 +297,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/cache/apt/archives \
         /var/lib/apt/lists/*
 
-ADD https://github.com/notglossy/vips-image-editor-ffi/releases/download/v3.1.0/vips-image-editor-ffi-3.1.0.zip /tmp/vips-image-editor-ffi.zip
-RUN unzip /tmp/vips-image-editor-ffi.zip -d /usr/src/wordpress/wp-content/plugins/ \
+# Pinned plugin release, verified against the SHA-256 GitHub records for the asset.
+# Unpacked with PHP's zip extension so the image doesn't need unzip.
+ADD --checksum=sha256:4fbfa7b1b17e8c1b618e767a9dc6308051ed0de2ab08dada6c220480e14d7771 \
+    https://github.com/notglossy/vips-image-editor-ffi/releases/download/v3.1.0/vips-image-editor-ffi-3.1.0.zip \
+    /tmp/vips-image-editor-ffi.zip
+RUN php -r '$z = new ZipArchive(); $z->open("/tmp/vips-image-editor-ffi.zip") === true && $z->extractTo("/usr/src/wordpress/wp-content/plugins/") || exit(1);' \
     && rm -f /tmp/vips-image-editor-ffi.zip \
     && chown -R ${USER_NAME}:${USER_NAME} /usr/src/wordpress/wp-content/plugins \
     && echo 'zend.max_allowed_stack_size=-1' >> $PHP_INI_DIR/conf.d/stack-size.ini \

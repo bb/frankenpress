@@ -7,10 +7,10 @@ A WordPress image built for simplicity and scale, powered by FrankenPHP and Cadd
 ```bash
 docker run -d \
   -p 80:80 \
-  -e DB_HOST=your-db-host \
-  -e DB_USER=wordpress \
-  -e DB_PASSWORD=your-password \
-  -e DB_NAME=wordpress \
+  -e WORDPRESS_DB_HOST=your-db-host \
+  -e WORDPRESS_DB_USER=wordpress \
+  -e WORDPRESS_DB_PASSWORD=your-password \
+  -e WORDPRESS_DB_NAME=wordpress \
   bock/frankenpress:latest
 ```
 
@@ -71,20 +71,29 @@ All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) fo
 
 #### FrankenPHP
 
-- `SERVER_NAME`: change the addresses on which to listen, the provided hostnames will also be used for the generated TLS certificate
+- `SERVER_NAME`: change the addresses on which to listen. Real hostnames get a publicly trusted certificate (Let's Encrypt/ZeroSSL) automatically; `localhost` and IP addresses use Caddy's local CA
 - `CADDY_GLOBAL_OPTIONS`: inject global options (debug most common)
 - `FRANKENPHP_CONFIG`: inject config under the frankenphp directive
 
 #### Wordpress
 
-- `DB_NAME`: The WordPress database name.
-- `DB_USER`: The WordPress database user.
-- `DB_PASSWORD`: The WordPress database password.
-- `DB_HOST`: The WordPress database host.
-- `DB_TABLE_PREFIX`: The WordPress database table prefix.
-- `WP_DEBUG`: Turns on WordPress Debug.
-- `FORCE_HTTPS`: Tells WordPress to use https on requests. This is beneficial behind load balancer. Defaults to true.
+- `WORDPRESS_DB_NAME`: The WordPress database name.
+- `WORDPRESS_DB_USER`: The WordPress database user.
+- `WORDPRESS_DB_PASSWORD`: The WordPress database password.
+- `WORDPRESS_DB_HOST`: The WordPress database host.
+- `WORDPRESS_TABLE_PREFIX`: The WordPress database table prefix.
+- `WORDPRESS_DEBUG`: Turns on WordPress Debug.
+- `FORCE_HTTPS`: Set to `1` to tell WordPress every request is HTTPS. Useful behind a load balancer that terminates TLS. Defaults to `0`.
 - `WORDPRESS_CONFIG_EXTRA`: use this for adding WP_HOME, WP_SITEURL, etc
+
+## Security Hardening
+
+- **No PHP from uploads:** `.php`, `.phtml`, `.phar` and similar files under `wp-content/uploads` return 404, so a vulnerable upload form can't become remote code execution.
+- **No private files:** hidden files and folders (`.git`, `.env`, `.htaccess`, …) and backup or log files (`*.bak`, `*.sql`, `*.log`, …) return 404. `/.well-known/` is still served.
+- **Restricted image formats:** Imagick only handles GIF, JPEG, PNG, WebP, AVIF and HEIC, plus reading PDFs for thumbnails. PostScript, SVG and ImageMagick's other formats are refused, which keeps uploads away from rarely audited parsers.
+- **Security headers:** `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options` are added unless WordPress already sent them.
+- **Verified downloads:** WP-CLI and the VIPS plugin are pinned to releases and checked against their published checksums.
+- **WordPress core is writable by the web server user:** dashboard updates need this. Existing sites keep the WordPress version in their `/var/www/html` volume and update through WordPress itself; pulling a newer image doesn't change it.
 
 ## Questions
 
