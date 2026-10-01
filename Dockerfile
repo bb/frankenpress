@@ -285,6 +285,13 @@ FROM standard AS vips-ffi
 
 ARG USER_NAME=www-data
 
+# Only let libvips use its fuzzed, well-audited loaders. This blocks its
+# Poppler (PDF), librsvg (SVG) and ImageMagick loaders, which libvips would
+# otherwise pick by sniffing file contents, bypassing imagemagick-policy.xml
+# for PDF and SVG. WordPress still renders PDF thumbnails via Imagick.
+# See: https://www.libvips.org/API/current/func.block_untrusted_set.html
+ENV VIPS_BLOCK_UNTRUSTED=1
+
 USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

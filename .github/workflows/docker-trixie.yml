@@ -137,6 +137,7 @@ jobs:
             run php -m | grep -qx FFI
             run dpkg -l | grep libvips
             run ls /usr/src/wordpress/wp-content/plugins | grep vips-image-editor-ffi
+            run printenv VIPS_BLOCK_UNTRUSTED | grep -qx 1
           fi
 
       # Report-only: lists HIGH/CRITICAL vulnerabilities in the job summary and
