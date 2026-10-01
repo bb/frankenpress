@@ -17,22 +17,18 @@ docker run -d \
 ## Available Images
 
 ### Standard Images
-- `bock/frankenpress:latest` - Latest (PHP 8.4) on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:latest` / `trixie` - Latest (PHP 8.5) on Debian Trixie (amd64, arm64)
 - `bock/frankenpress:php-8.5-trixie` - PHP 8.5 on Debian Trixie (amd64, arm64)
-- `bock/frankenpress:php-8.4-trixie` - PHP 8.4 on Debian Trixie (amd64, arm64)
-- `bock/frankenpress:php-8.3-trixie` - PHP 8.3 on Debian Trixie (amd64, arm64)
-- `bock/frankenpress:php-8.2-trixie` - PHP 8.2 on Debian Trixie (amd64, arm64)
 
 ### VIPS Images (with FFI support for advanced image processing)
-- `bock/frankenpress:vips-ffi` - Latest VIPS (PHP 8.4) on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:vips-ffi` / `vips-ffi-trixie` - Latest VIPS (PHP 8.5) on Debian Trixie (amd64, arm64)
 - `bock/frankenpress:php-8.5-vips-ffi-trixie` - PHP 8.5 VIPS on Debian Trixie (amd64, arm64)
-- `bock/frankenpress:php-8.4-vips-ffi-trixie` - PHP 8.4 VIPS on Debian Trixie (amd64, arm64)
 
-All images are built on Debian 13 (Trixie). Debian Bookworm and 32-bit ARM (arm/v7) images are no longer built.
+All images are built on Debian 13 (Trixie) with PHP 8.5. Both variants come from the same `Dockerfile`: the VIPS image is its `vips-ffi` target (`docker build --target vips-ffi .`).
 
 ## Performance & Build Optimization
 
-Standard image arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) for maximum performance and speed. This eliminates QEMU emulation overhead, resulting in significantly faster build times.
+All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) for maximum performance and speed. This eliminates QEMU emulation overhead, resulting in significantly faster build times.
 
 ## Links
 
@@ -51,7 +47,7 @@ Standard image arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.
 ### PHP Extensions & Caching
 
 **Performance & Caching:**
-- OPcache (configured for production)
+- OPcache (built into PHP 8.5, configured for production)
 - APCu
 - Memcached
 - Redis
