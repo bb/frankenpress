@@ -40,7 +40,7 @@ All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) fo
 ### Core Components
 
 - **[WordPress](https://wordpress.org/)** - Latest version from official WordPress Docker images
-- **[FrankenPHP](https://frankenphp.dev/)** - Modern PHP application server (custom builds from [frankenpress-src](https://github.com/notglossy/frankenpress-src))
+- **[FrankenPHP](https://frankenphp.dev/)** - Modern PHP application server (official [dunglas/frankenphp](https://hub.docker.com/r/dunglas/frankenphp) images)
 - **[Caddy](https://caddyserver.com/)** - Fast, secure web server with automatic HTTPS
 - **PHP Extensions** - Optimized selection for WordPress performance
 
