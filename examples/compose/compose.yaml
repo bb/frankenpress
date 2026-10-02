@@ -14,6 +14,14 @@ services:
   wordpress:
     image: bock/frankenpress:latest
     restart: unless-stopped
+    # Limits for a typical site (low to moderate traffic, ~50-100 MB per
+    # request). Set CPU, memory and PHP threads together; see "Resource
+    # Limits" in the README before changing one of them.
+    deploy:
+      resources:
+        limits:
+          cpus: 2
+          memory: 1G
     ports:
       - "80:80"
       - "443:443"
@@ -21,6 +29,12 @@ services:
     environment:
       SERVER_NAME: ${SERVER_NAME:?Set SERVER_NAME in .env}
       CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
+      # PHP threads: start with 4, add more under load, up to 8. Without
+      # this, FrankenPHP starts two per CPU it sees: only 2 with "cpus: 1",
+      # 64 on an unlimited 32-thread host.
+      FRANKENPHP_CONFIG: |
+        num_threads 4
+        max_threads 8
       # Outgoing mail (password resets, notifications); see "Sending Email"
       # in the README. Without MSMTP_HOST, WordPress can't send email.
       MSMTP_HOST: ${MSMTP_HOST:-}
@@ -53,6 +67,10 @@ services:
   db:
     image: mariadb:lts
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     environment:
       # Upgrade the data directory (after backing up the system tables) when
       # the image moves to a new major version. Without it, e.g.
