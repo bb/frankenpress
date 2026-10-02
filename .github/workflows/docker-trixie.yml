@@ -226,8 +226,8 @@ jobs:
 
       # Besides the floating tags, publish version-specific ones so deployments
       # can pin a build and roll back, e.g. php-8.5-trixie-wp7.1.2 (follows
-      # rebuilds of that WordPress version) and php-8.5-trixie-wp7.1.2-20261004
-      # (one specific weekly build).
+      # rebuilds of that WordPress version) and php-8.5-trixie-wp7.1.2-20261004-0112
+      # (one specific build; the UTC time keeps several builds on one day apart).
       - name: Create multi-arch manifests
         run: |
           set -euo pipefail
@@ -235,7 +235,7 @@ jobs:
           wp=$(docker run --rm --entrypoint php "${{ env.DOCKERHUB_IMAGE }}:$tag-amd64" \
             -r 'include "/usr/src/wordpress/wp-includes/version.php"; echo $wp_version;')
           [[ "$wp" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::Unexpected WordPress version '$wp'"; exit 1; }
-          build_date=$(date -u +%Y%m%d)
+          build_date=$(date -u +%Y%m%d-%H%M)
           echo "::notice title=Tags ($tag)::WordPress $wp, build $build_date"
           for repo in "${{ env.DOCKERHUB_IMAGE }}" "ghcr.io/${{ github.repository_owner }}/frankenpress"; do
             tags=(-t "$repo:$tag" -t "$repo:$tag-wp$wp" -t "$repo:$tag-wp$wp-$build_date")
