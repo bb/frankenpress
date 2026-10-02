@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# FrankenPress entrypoint: optionally repairs ownership of mounted folders,
-# then hands over to the official WordPress entrypoint.
+# FrankenPress entrypoint: logs the mail setup, optionally repairs ownership
+# of mounted folders, then hands over to the official WordPress entrypoint.
 #
 # The image runs as $FRANKENPRESS_USER (www-data) by default and this script
 # does nothing extra. Bind mounts and some platforms (e.g. AWS ECS) hand the
@@ -9,6 +9,18 @@
 # FIX_PERMISSIONS=1: files not owned by the web user get chowned, then the
 # process drops to that user for good.
 set -euo pipefail
+
+# Say once at server start where mail goes, so a missing relay isn't silent
+# (WordPress would otherwise fail every wp_mail() without telling anyone).
+if [[ "${1:-}" == frankenphp* ]]; then
+    if [ "${MSMTP:-on}" = off ]; then
+        echo "FrankenPress: mail is disabled (MSMTP=off)"
+    elif [ -n "${MSMTP_HOST:-}${MSMTP_HOST_FILE:-}" ]; then
+        echo "FrankenPress: mail is sent via ${MSMTP_HOST:-<MSMTP_HOST_FILE>}:${MSMTP_PORT:-587}"
+    else
+        echo "FrankenPress: mail is NOT configured; WordPress can't send email until MSMTP_HOST is set (or set MSMTP=off to disable mail)" >&2
+    fi
+fi
 
 if [ "$(id -u)" = 0 ] && [ "${FIX_PERMISSIONS:-0}" = 1 ]; then
     user="${FRANKENPRESS_USER:-www-data}"

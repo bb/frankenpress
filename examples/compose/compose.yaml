@@ -19,6 +19,13 @@ services:
     environment:
       SERVER_NAME: ${SERVER_NAME:?Set SERVER_NAME in .env}
       CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
+      # Outgoing mail (password resets, notifications); see "Sending Email"
+      # in the README. Without MSMTP_HOST, WordPress can't send email.
+      MSMTP_HOST: ${MSMTP_HOST:-}
+      MSMTP_PORT: ${MSMTP_PORT:-587}
+      MSMTP_USER: ${MSMTP_USER:-}
+      MSMTP_PASSWORD: ${MSMTP_PASSWORD:-}
+      MSMTP_FROM: ${MSMTP_FROM:-}
       WORDPRESS_DB_HOST: db
       WORDPRESS_DB_NAME: ${DB_NAME:-wordpress}
       WORDPRESS_DB_USER: ${DB_USER:-wordpress}

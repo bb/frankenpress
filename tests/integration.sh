@@ -7,12 +7,12 @@
 # the hardening rules, proxy handling and image processing. Needs Docker and
 # curl, jq and python3; exits non-zero if any check fails.
 set -u
-IMG=$1; VARIANT=$2; NET=fpt-$$; WP=fpwp-$$; DB=fpdb-$$; PORT=${PORT:-18081}
+IMG=$1; VARIANT=$2; NET=fpt-$$; WP=fpwp-$$; DB=fpdb-$$; MAIL=fpmail-$$; PORT=${PORT:-18081}
 fail=0
 check() { # check <description> <expected> <actual>
   if [ "$2" = "$3" ]; then printf "  ok    %-52s %s\n" "$1" "$3"; else printf "  FAIL  %-52s expected=%s got=%s\n" "$1" "$2" "$3"; fail=1; fi
 }
-cleanup() { docker rm -fv $WP $DB >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
+cleanup() { docker rm -fv $WP $DB $MAIL >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
 trap cleanup EXIT
 
 echo "=== $IMG ($VARIANT)"
@@ -43,9 +43,11 @@ docker volume rm $VOL >/dev/null
 
 # --- runtime
 docker network create $NET >/dev/null
+# SMTP sink with an HTTP API, to check mail delivery
+docker run -d --name $MAIL --network $NET -p $((PORT + 2)):8025 axllent/mailpit >/dev/null
 docker run -d --name $DB --network $NET -e MARIADB_ROOT_PASSWORD=r -e MARIADB_DATABASE=wp -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11 >/dev/null
 for _ in $(seq 1 40); do docker exec $DB mariadb -uwp -pwp -e 'select 1' wp >/dev/null 2>&1 && break; sleep 2; done
-docker run -d --name $WP --network $NET -p $PORT:80 -e DISALLOW_FILE_EDIT=1 -e HSTS=max-age=300 -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
+docker run -d --name $WP --network $NET -p $PORT:80 -e DISALLOW_FILE_EDIT=1 -e HSTS=max-age=300 -e MSMTP_HOST=$MAIL -e MSMTP_PORT=1025 -e MSMTP_TLS=off -e MSMTP_FROM=noreply@site.example -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
 for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:$PORT/ && break; sleep 1; done
 docker exec $WP wp core install --url=http://localhost:$PORT --title=T --admin_user=a --admin_password=a --admin_email=a@example.com --skip-email >/dev/null 2>&1
 B=http://localhost:$PORT
@@ -138,9 +140,22 @@ if [ "$VARIANT" = vips-ffi ]; then
   check "VIPS editor in use" 'NotGlossy\VipsImageEditorFFI\Image_Editor_Vips_FFI' "$(docker exec $WP wp eval 'echo get_class(wp_get_image_editor("/tmp/t.jpg"));' 2>/dev/null)"
 fi
 
+# Mail: PHP's mail() during a web request goes through sendmail -> msmtp
+docker exec $WP sh -c 'echo "<?php var_export(mail(\"alice@example.org\", \"FrankenPress test\", \"Hello\", \"From: WordPress <wordpress@site.example>\"));" > mail.php'
+check "mail() from a web request succeeds" true "$(curl -s $B/mail.php)"
+sleep 1
+check "message delivered via MSMTP_* relay" "FrankenPress test alice@example.org noreply@site.example" "$(m=$(curl -s "http://localhost:$((PORT + 2))/api/v1/messages") && id=$(jq -r '.messages[0].ID' <<<"$m") && echo "$(jq -r '.messages[0] | "\(.Subject) \(.To[0].Address)"' <<<"$m") $(curl -s "http://localhost:$((PORT + 2))/api/v1/message/$id/headers" | jq -r '."Return-Path"[0]' | tr -d '<>')")"
+# wp_mail() as WordPress itself sends; the test site's URL is localhost, so
+# give WordPress a From address with a real domain
+check "wp_mail() succeeds" true "$(docker exec $WP wp eval 'add_filter("wp_mail_from", fn() => "wordpress@site.example"); var_export(wp_mail("bob@example.org", "wp_mail test", "Hello"));' 2>/dev/null)"
+sleep 1
+check "wp_mail() arrives with the configured sender" "bob@example.org noreply@site.example" "$(m=$(curl -s "http://localhost:$((PORT + 2))/api/v1/search?query=subject:%22wp_mail%20test%22") && id=$(jq -r '.messages[0].ID' <<<"$m") && echo "$(jq -r '.messages[0].To[0].Address' <<<"$m") $(curl -s "http://localhost:$((PORT + 2))/api/v1/message/$id/headers" | jq -r '."Return-Path"[0]' | tr -d '<>')")"
+check "startup log names the mail relay" 1 "$(docker logs $WP 2>&1 | grep -c "FrankenPress: mail is sent via $MAIL:1025")"
+check "msmtp logs the delivery to the container log" 1 "$(docker logs $WP 2>&1 | grep -c 'MSMTP .*recipients=alice@example.org.*exitcode=EX_OK')"
+
 # Request size cap and header timeout, on small limits so the test is quick
 LIM=fplim-$$
-docker run -d --name $LIM -p $((PORT + 1)):80 -e REQUEST_BODY_MAX_BYTES=1024 -e TIMEOUT_READ_HEADER=2s -e TRUSTED_PROXIES=198.51.100.0/24 --entrypoint sh "$IMG" -c 'echo "<?php echo \$_SERVER[\"HTTP_X_FORWARDED_PROTO\"] ?? \"none\", \" \", (empty(\$_SERVER[\"HTTPS\"]) ? \"off\" : \$_SERVER[\"HTTPS\"]);" > /var/www/html/proto.php && exec frankenphp run --config /etc/caddy/Caddyfile' >/dev/null
+docker run -d --name $LIM -p $((PORT + 1)):80 -e REQUEST_BODY_MAX_BYTES=1024 -e TIMEOUT_READ_HEADER=2s -e TRUSTED_PROXIES=198.51.100.0/24 --entrypoint sh "$IMG" -c 'echo "<?php echo \$_SERVER[\"HTTP_X_FORWARDED_PROTO\"] ?? \"none\", \" \", (empty(\$_SERVER[\"HTTPS\"]) ? \"off\" : \$_SERVER[\"HTTPS\"]);" > /var/www/html/proto.php && echo "<?php var_export(mail(\"a@example.org\", \"t\", \"b\"));" > /var/www/html/mail.php && exec frankenpress-entrypoint.sh frankenphp run --config /etc/caddy/Caddyfile' >/dev/null
 for _ in $(seq 1 30); do curl -s -o /dev/null "http://localhost:$((PORT + 1))/healthz" && break; sleep 1; done
 check "body over REQUEST_BODY_MAX_BYTES refused (413)" 413 "$(head -c 4096 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/index.php")"
 check "body under the limit still accepted" 200 "$(head -c 512 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz")"
@@ -162,6 +177,10 @@ check "stalled request headers time out (TIMEOUT_READ_HEADER)" closed "$slow"
 check "X-Forwarded-Proto from untrusted client dropped" "none off" "$(curl -s -H 'X-Forwarded-Proto: https' "http://localhost:$((PORT + 1))/proto.php")"
 check "X_Forwarded_Proto (underscore) from untrusted client dropped" "none off" "$(curl -s -H 'X_Forwarded_Proto: https' "http://localhost:$((PORT + 1))/proto.php")"
 check "X-Forwarded_Proto (mixed) from untrusted client dropped" "none off" "$(curl -s -H 'X-Forwarded_Proto: https' "http://localhost:$((PORT + 1))/proto.php")"
+# Unconfigured mail is visible: once at startup, and for every failed mail
+check "startup log says mail isn't configured" 1 "$(docker logs $LIM 2>&1 | grep -c 'FrankenPress: mail is NOT configured')"
+check "mail() without a relay fails in a web request" false "$(curl -s "http://localhost:$((PORT + 1))/mail.php")"
+check "the failed mail is logged" 1 "$(docker logs $LIM 2>&1 | grep -c 'sendmail: no SMTP relay configured')"
 docker rm -fv $LIM >/dev/null
 
 errs=$(docker logs $WP 2>&1 | grep -E '"level":"error"|PHP (Fatal|Warning|Parse)' | grep -v 'install root certificate' | head -3)
