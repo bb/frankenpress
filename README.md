@@ -63,7 +63,7 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
 - **[Caddy](https://caddyserver.com/)** - Fast, secure web server with automatic HTTPS
 - **PHP Extensions** - Optimized selection for WordPress performance
 
-There is no built-in page cache. Use a caching plugin, and Redis for the object cache, as in the [compose example](examples/compose/compose.yaml). Variables such as `CACHE_LOC`, `TTL`, `PURGE_*`, `BYPASS_*` or `CACHE_RESPONSE_CODES` from older FrankenWP examples have no effect.
+There is no built-in page cache. Use a caching plugin, and Redis for the object cache, as in the [compose example](examples/compose/compose.yaml). With WP Super Cache, Caddy can serve the cached pages without PHP; see [Page Cache](#page-cache). Variables such as `CACHE_LOC`, `TTL`, `PURGE_*`, `BYPASS_*` or `CACHE_RESPONSE_CODES` from older FrankenWP examples have no effect.
 
 ### PHP Extensions & Caching
 
@@ -103,6 +103,7 @@ There is no built-in page cache. Use a caching plugin, and Redis for the object 
 - `FIX_OWNERSHIP`: set to `1` and start the container as root (`--user root`, or `user: root` in compose) to repair ownership of mounted folders at startup. Useful when bind mounts or platforms like AWS ECS hand the container root-owned folders, so uploads or certificates can't be written. Files not owned by the web user in `/var/www/html`, `/data/caddy` and `/config/caddy` are chowned (symlinks themselves, never their targets), then the server drops to `www-data`. Without `FIX_OWNERSHIP`, the image runs as `www-data` as before. Images from 2026-10-02 called it `FIX_PERMISSIONS`; that name now stops the container with a message
 - `UMASK`: file creation mask, e.g. `0002` for group-writable files. Unset keeps `0022`. See [Sharing wp-content with another user](#sharing-wp-content-with-another-user)
 - `HSTS`: set to a `Strict-Transport-Security` value, e.g. `max-age=31536000`, to send HSTS on HTTPS requests (direct or forwarded by a trusted proxy). Off by default; add `; includeSubDomains` only if every subdomain serves HTTPS
+- `SUPERCACHE`: set to `1` to serve WP Super Cache's cached pages straight from disk, without PHP. See [Page Cache](#page-cache)
 - `BLOCK_XMLRPC`: set to `1` to refuse `xmlrpc.php` (403), a common password-guessing target. Off by default because Jetpack and the WordPress mobile apps still use it
 
 #### WordPress
@@ -234,6 +235,22 @@ services:
 **At the limit**, the kernel first reclaims page cache. If that isn't enough, it kills FrankenPHP, and the container restarts (`restart: unless-stopped`). Requests in progress at that moment fail.
 
 **Image optimisation plugins** that process images locally (e.g. EWWW Image Optimizer) use every core for a single image through ImageMagick. A CPU limit makes them slower, not broken.
+
+## Page Cache
+
+[WP Super Cache](https://wordpress.org/plugins/wp-super-cache/) stores finished pages as static HTML files. On Apache, its rewrite rules serve them without starting PHP. `SUPERCACHE=1` does the same in Caddy, so anonymous visitors don't take up a PHP thread at all, which matters with the few threads from [Resource Limits](#resource-limits).
+
+1. Install and activate the plugin, then turn caching on under Settings → WP Super Cache. Keep the delivery method on "Simple": "Expert" writes Apache rules, and Caddy does that job here.
+2. Set `SUPERCACHE=1` and recreate the container.
+3. Check it, logged out: `curl -sI https://example.com/ | grep -i x-frankenpress-cache` prints `HIT` once the page is cached (the first visit creates it).
+
+Caddy uses the plugin's own conditions: `GET` or `HEAD`, no query string, no login, comment-author or password-protected-post cookie, and a cached file for that host and path (`index-https.html` for HTTPS, including requests a trusted proxy forwards as HTTPS; the plugin's `.gz` files when compression is on). Like the plugin, it sends `Cache-Control: max-age=3, must-revalidate`. Everything else goes to WordPress as before, which serves the plugin's cache through PHP.
+
+Limits:
+
+- Only paths ending in `/`, WordPress's default permalinks. Without a trailing slash, pages are still cached, but served through PHP.
+- Don't turn on the plugin's mobile device support: Caddy doesn't check user agents, so phones would get the desktop pages. Responsive themes don't need it.
+- Cookies that other plugins register with WP Super Cache to skip the cache (`wpsc_add_cookie`) aren't known to Caddy. If a plugin relies on that, leave `SUPERCACHE` off.
 
 ## Sharing wp-content with Another User
 

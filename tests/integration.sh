@@ -65,7 +65,7 @@ docker network create $NET >/dev/null
 docker run -d --name $MAIL --network $NET -p $((PORT + 2)):8025 axllent/mailpit >/dev/null
 docker run -d --name $DB --network $NET -e MARIADB_ROOT_PASSWORD=r -e MARIADB_DATABASE=wp -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11 >/dev/null
 for _ in $(seq 1 40); do docker exec $DB mariadb -uwp -pwp -e 'select 1' wp >/dev/null 2>&1 && break; sleep 2; done
-docker run -d --name $WP --network $NET -p $PORT:80 -e UMASK=0002 -e HSTS=max-age=300 -e MSMTP_HOST=$MAIL -e MSMTP_PORT=1025 -e MSMTP_TLS=off -e MSMTP_FROM=noreply@site.example -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
+docker run -d --name $WP --network $NET -p $PORT:80 -e UMASK=0002 -e SUPERCACHE=1 -e HSTS=max-age=300 -e MSMTP_HOST=$MAIL -e MSMTP_PORT=1025 -e MSMTP_TLS=off -e MSMTP_FROM=noreply@site.example -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
 for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:$PORT/ && break; sleep 1; done
 docker exec $WP wp core install --url=http://localhost:$PORT --title=T --admin_user=a --admin_password=a --admin_email=a@example.com --skip-email >/dev/null 2>&1
 B=http://localhost:$PORT
@@ -162,11 +162,29 @@ check "UMASK=0002: file written by docker exec wp is 664" 664 "$(docker exec $WP
 check "UMASK=0002: plugin/theme updates use 664/775" 664/775 "$(docker exec $WP wp eval 'require_once ABSPATH . "wp-admin/includes/file.php"; WP_Filesystem(); printf("%o/%o", FS_CHMOD_FILE, FS_CHMOD_DIR & 0777);' 2>/dev/null)"
 check "without UMASK: file written in a web request is 644" 644 "$(docker exec $WP2 curl -s http://127.0.0.1/umask.php)"
 check "without UMASK: file written by docker exec wp is 644" 644 "$(docker exec $WP2 wp eval 'touch(ABSPATH . "umask-cli.txt"); echo substr(sprintf("%o", fileperms(ABSPATH . "umask-cli.txt")), -3);' 2>/dev/null)"
+# $WP2 runs without SUPERCACHE: the same kind of file is left to WordPress,
+# which redirects 127.0.0.1 to the site URL
+check "supercache: off without SUPERCACHE=1" "301 " "$(docker exec $WP2 sh -c 'mkdir -p wp-content/cache/supercache/127.0.0.1/sc-test && echo x > wp-content/cache/supercache/127.0.0.1/sc-test/index.html && curl -s -o /dev/null -w "%{http_code} %header{x-frankenpress-cache}" http://127.0.0.1/sc-test/')"
 docker rm -fv $WP2 >/dev/null
 
 check "HSTS not sent over plain HTTP" 0 "$(curl -sI $B/ | grep -ci '^strict-transport-security:')"
 check "HSTS sent when proxy forwards HTTPS" "max-age=300" "$(curl -sI -H 'X-Forwarded-Proto: https' $B/ | grep -i '^strict-transport-security:' | cut -d' ' -f2- | tr -d '\r')"
 check "brotli" br "$(curl -s -H 'Accept-Encoding: br' -o /dev/null -w '%header{content-encoding}' $B/)"
+
+# SUPERCACHE=1 ($WP): WP Super Cache's files are served without PHP, the
+# plugin's bypass conditions fall through to WordPress. Files written by hand
+# in the plugin's layout (wp-content/cache/supercache/<host><path>index.html).
+docker exec $WP sh -c 'd=wp-content/cache/supercache/localhost/sc-test; mkdir -p $d && echo cached-http > $d/index.html && echo cached-https > $d/index-https.html && echo cached-gzip | gzip > $d/index.html.gz'
+sc() { curl -s -o /dev/null -w '%{http_code} %header{x-frankenpress-cache}' "$@"; } # "200 HIT" from the cache, "404 " from WordPress
+check "supercache: cached page served without PHP" "200 HIT cached-http" "$(sc $B/sc-test/) $(curl -s -H 'Accept-Encoding: identity' $B/sc-test/)"
+check "supercache: HTTPS via trusted proxy gets index-https.html" cached-https "$(curl -s -H 'X-Forwarded-Proto: https' -H 'Accept-Encoding: identity' $B/sc-test/)"
+check "supercache: precompressed index.html.gz" "gzip cached-gzip" "$(curl -s -o /dev/null -w '%header{content-encoding}' -H 'Accept-Encoding: gzip' $B/sc-test/) $(curl -s -H 'Accept-Encoding: gzip' $B/sc-test/ | gunzip)"
+check "supercache: Cache-Control as the plugin sends it" "max-age=3, must-revalidate" "$(curl -s -o /dev/null -w '%header{cache-control}' $B/sc-test/)"
+check "supercache: bypassed for logged-in users" "404 " "$(sc -H 'Cookie: a=1; wordpress_logged_in_x=y' $B/sc-test/)"
+check "supercache: bypassed for comment authors" "404 " "$(sc -H 'Cookie: comment_author_x=y' $B/sc-test/)"
+check "supercache: bypassed with a query string" "404 " "$(sc "$B/sc-test/?sc=1")"
+check "supercache: bypassed for POST" "404 " "$(sc -X POST $B/sc-test/)"
+check "supercache: path without trailing slash not served" "404 " "$(sc $B/sc-test)"
 
 # --- image processing through WordPress
 docker exec -i $WP sh -c 'cat > /tmp/img.php' <<'EOF'
