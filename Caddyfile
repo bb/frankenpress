@@ -98,30 +98,17 @@ http://127.0.0.1:2080 {
 
 	# Behind a TLS-terminating proxy, tell PHP the request was HTTPS when a
 	# trusted proxy (TRUSTED_PROXIES) says so via X-Forwarded-Proto or
-	# CloudFront-Forwarded-Proto. The PHP prepend file turns the marker header
-	# into $_SERVER['HTTPS']; any client-supplied copy of it is stripped first.
-	# The route keeps the two directives in this order (Caddy would otherwise
-	# run the unconditional one last).
-	#
-	# WordPress's own wp-config.php also turns X-Forwarded-Proto into HTTPS,
-	# for any client. So the header is dropped from requests that don't come
-	# from a trusted proxy; otherwise any visitor could claim HTTPS.
+	# CloudFront-Forwarded-Proto. The result reaches PHP as server variables
+	# (FRANKENPRESS_HTTPS, FRANKENPRESS_TRUSTED_PROXY, set in php_server
+	# below), not as headers: client headers always arrive as HTTP_*, so no
+	# header spelling can forge them. frankenpress-prepend.php then sets
+	# $_SERVER['HTTPS'], and removes HTTP_X_FORWARDED_PROTO and
+	# HTTP_CLOUDFRONT_FORWARDED_PROTO from requests that didn't come from a
+	# trusted proxy, because WordPress's stock wp-config.php would otherwise
+	# believe any visitor claiming HTTPS. Working on PHP's normalized names
+	# covers every "-"/"_" spelling of those headers.
 	@forwarded_https `{http.vars.trusted_proxy} == true && ({header.X-Forwarded-Proto}.lowerAscii().startsWith("https") || {header.CloudFront-Forwarded-Proto}.lowerAscii().startsWith("https"))`
-	@untrusted_client `{http.vars.trusted_proxy} != true`
-	#
-	# PHP sees "-" and "_" alike in header names (X_Forwarded_Proto also
-	# becomes HTTP_X_FORWARDED_PROTO). The server currently drops header names
-	# with underscores before they get here; the underscore removals below
-	# keep this safe even if that ever changes.
-	route {
-		request_header -X-Frankenpress-Https
-		request_header -X_Frankenpress_Https
-		request_header @untrusted_client -X-Forwarded-Proto
-		request_header @untrusted_client -X_Forwarded_Proto
-		request_header @untrusted_client -CloudFront-Forwarded-Proto
-		request_header @untrusted_client -CloudFront_Forwarded_Proto
-		request_header @forwarded_https X-Frankenpress-Https on
-	}
+	vars @forwarded_https frankenpress_https on
 
 	@static {
 		file
@@ -154,5 +141,8 @@ http://127.0.0.1:2080 {
 		# client IP resolved via trusted_proxies so WordPress, login limiters and
 		# security plugins see real visitors instead of the load balancer.
 		env REMOTE_ADDR {client_ip}
+		# Trust and HTTPS decisions for frankenpress-prepend.php (see above)
+		env FRANKENPRESS_TRUSTED_PROXY {http.vars.trusted_proxy}
+		env FRANKENPRESS_HTTPS {http.vars.frankenpress_https}
 	}
 }

@@ -16,12 +16,27 @@ $frankenpress_enabled = static function (string $name): bool {
     return in_array(strtolower((string) getenv($name)), ['1', 'true', 'yes', 'on'], true);
 };
 
-// HTTPS: forced via FORCE_HTTPS, or marked by Caddy when a trusted proxy
-// forwarded the request as HTTPS (clients can't set the marker themselves;
-// Caddy strips it from incoming requests).
-if (PHP_SAPI !== 'cli'
-    && ($frankenpress_enabled('FORCE_HTTPS') || ($_SERVER['HTTP_X_FRANKENPRESS_HTTPS'] ?? '') === 'on')) {
-    $_SERVER['HTTPS'] = 'on';
+if (PHP_SAPI !== 'cli') {
+    // Forwarded-protocol headers only count from trusted proxies. Caddy says
+    // whether the request came from one (TRUSTED_PROXIES) in a server
+    // variable no client header can produce. Without this, WordPress's stock
+    // wp-config.php would treat any visitor sending X-Forwarded-Proto: https
+    // as HTTPS. $_SERVER keys are normalized, so this covers every "-"/"_"
+    // spelling of the headers.
+    if (($_SERVER['FRANKENPRESS_TRUSTED_PROXY'] ?? '') !== 'true') {
+        unset($_SERVER['HTTP_X_FORWARDED_PROTO'], $_SERVER['HTTP_CLOUDFRONT_FORWARDED_PROTO']);
+    }
+
+    // Older images passed the HTTPS decision as an X-Frankenpress-Https
+    // header, and sites created with them check it in wp-config.php. It's
+    // never legitimate now, so drop any client-sent copy.
+    unset($_SERVER['HTTP_X_FRANKENPRESS_HTTPS']);
+
+    // HTTPS: forced via FORCE_HTTPS, or decided by Caddy when a trusted proxy
+    // forwarded the request as HTTPS
+    if ($frankenpress_enabled('FORCE_HTTPS') || ($_SERVER['FRANKENPRESS_HTTPS'] ?? '') === 'on') {
+        $_SERVER['HTTPS'] = 'on';
+    }
 }
 
 // Turn off the theme and plugin code editors in wp-admin, so a stolen admin
