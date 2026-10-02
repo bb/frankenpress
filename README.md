@@ -98,7 +98,7 @@ There is no built-in page cache. Use a caching plugin, and Redis for the object 
 - `CADDY_GLOBAL_OPTIONS`: inserted into Caddy's global options block, e.g. `email admin@example.com` for the Let's Encrypt account or `debug`
 - `CADDY_SERVER_EXTRA_DIRECTIVES`: inserted into the site block, before WordPress handles the request, e.g. `header /wp-content/uploads/* Cache-Control "public, max-age=31536000, immutable"`
 - `CADDY_EXTRA_CONFIG`: inserted at the top level of the Caddyfile, e.g. an extra site block. See [Custom Caddy Configuration](#custom-caddy-configuration)
-- `FRANKENPHP_CONFIG`: inject config under the frankenphp directive
+- `FRANKENPHP_CONFIG`: inject config under the frankenphp directive, e.g. `num_threads` and `max_threads`. See [Resource Limits](#resource-limits)
 - `TRUSTED_PROXIES`: proxies whose `X-Forwarded-For` header is trusted for the client IP, as space-separated CIDRs. Defaults to `private_ranges` (10/8, 172.16/12, 192.168/16, 127/8 and their IPv6 equivalents). Set it to your load balancer's range so other hosts on a private network can't spoof their IP. Trusted proxies can also mark a request as HTTPS via `X-Forwarded-Proto` or `CloudFront-Forwarded-Proto`
 - `FIX_OWNERSHIP`: set to `1` and start the container as root (`--user root`, or `user: root` in compose) to repair ownership of mounted folders at startup. Useful when bind mounts or platforms like AWS ECS hand the container root-owned folders, so uploads or certificates can't be written. Files not owned by the web user in `/var/www/html`, `/data/caddy` and `/config/caddy` are chowned (symlinks themselves, never their targets), then the server drops to `www-data`. Without `FIX_OWNERSHIP`, the image runs as `www-data` as before. Images from 2026-10-02 called it `FIX_PERMISSIONS`; that name now stops the container with a message
 - `UMASK`: file creation mask, e.g. `0002` for group-writable files. Unset keeps `0022`. See [Sharing wp-content with another user](#sharing-wp-content-with-another-user)
@@ -201,6 +201,40 @@ Test it with:
 At startup the container logs where mail goes, or `mail is NOT configured`. Each delivery is logged as one `MSMTP` line with sender, recipients and SMTP status, never the message body or password. A failed mail logs the reason, and `wp_mail()` returns `false`.
 
 SMTP or API plugins (FluentSMTP, WP Mail SMTP, …) send on their own and take precedence over these settings when installed.
+
+## Resource Limits
+
+Set CPU, memory and PHP threads together. FrankenPHP starts two PHP threads per CPU it sees, and each may use up to `memory_limit` (256M):
+
+- **No limit:** on a 32-thread host that's 64 PHP threads, so one site could take about 16 GB. Memory also grows over time, because PHP keeps each thread's peak allocation.
+- **CPU limit only:** with `cpus: 1`, FrankenPHP sees one CPU and starts only 2 threads. Two slow requests then block every other visitor.
+
+So set the threads yourself. With `num_threads` (threads at startup) and `max_threads` (FrankenPHP adds threads under load, up to this many), the thread count no longer depends on the CPU limit. The [compose example](examples/compose/compose.yaml) uses values that suit typical sites with low to moderate traffic and ~50–100 MB per request:
+
+```yaml
+services:
+  wordpress:
+    deploy:
+      resources:
+        limits:
+          cpus: 2
+          memory: 1G
+    environment:
+      FRANKENPHP_CONFIG: |
+        num_threads 4
+        max_threads 8
+  db:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+```
+
+**Sizing:** `max_threads` × typical memory per request should fit in the memory limit, with headroom for Caddy and OPcache. Raise both for heavy sites (image optimisation plugins, page builders, WooCommerce), e.g. `cpus: 4`, `memory: 3G`, `num_threads 8`, `max_threads 16`.
+
+**At the limit**, the kernel first reclaims page cache. If that isn't enough, it kills FrankenPHP, and the container restarts (`restart: unless-stopped`). Requests in progress at that moment fail.
+
+**Image optimisation plugins** that process images locally (e.g. EWWW Image Optimizer) use every core for a single image through ImageMagick. A CPU limit makes them slower, not broken.
 
 ## Sharing wp-content with Another User
 
