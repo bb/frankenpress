@@ -256,7 +256,7 @@ RUN curl -fsSL -o /usr/local/bin/wp \
 # 2. Set ownership of the Caddy and web root directories
 #
 # NOTE: On some platforms (e.g., AWS ECS), volume mounts are owned by root.
-# Start the container as root with FIX_PERMISSIONS=1 to repair ownership at
+# Start the container as root with FIX_OWNERSHIP=1 to repair ownership at
 # startup and then drop to USER_NAME (see frankenpress-entrypoint.sh).
 ARG USER_NAME=www-data
 ENV FRANKENPRESS_USER=${USER_NAME}
@@ -348,7 +348,7 @@ USER $USER_NAME
 # -----------------------------------------------------------------------------
 # Entrypoint and Command
 # -----------------------------------------------------------------------------
-# Entrypoint: optional ownership repair (FIX_PERMISSIONS=1 when started as
+# Entrypoint: optional ownership repair (FIX_OWNERSHIP=1 when started as
 # root), then the WordPress initialization script (copies core files, sets up db)
 # Command: Start FrankenPHP server with Caddy configuration
 #

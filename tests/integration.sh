@@ -31,14 +31,15 @@ check "memory_limit" 256M "$(docker run --rm "$IMG" php -r 'echo ini_get("memory
 check "real hostname uses ACME, not internal CA" "" "$(docker run --rm -e SERVER_NAME=example.com --entrypoint frankenphp "$IMG" adapt --config /etc/caddy/Caddyfile 2>/dev/null | grep -o '"module":"internal"')"
 check "max_input_vars" 5000 "$(docker run --rm "$IMG" php -r 'echo ini_get("max_input_vars");')"
 
-# FIX_PERMISSIONS: a root-owned volume (with a symlink planted in it) gets
+# FIX_OWNERSHIP: a root-owned volume (with a symlink planted in it) gets
 # repaired at startup, then the process drops to www-data
 VOL=fpvol-$$
 docker volume create $VOL >/dev/null
 docker run --rm -v $VOL:/data/caddy --entrypoint sh "$IMG" -c 'exit 0' >/dev/null 2>&1
 docker run --rm --user root -v $VOL:/data/caddy --entrypoint sh "$IMG" -c 'mkdir -p /data/caddy/certs && touch /data/caddy/certs/x && ln -s /etc/shadow /data/caddy/link && chown -R root:root /data/caddy'
-fix=$(docker run --rm --user root -e FIX_PERMISSIONS=1 -v $VOL:/data/caddy "$IMG" sh -c 'echo "$(id -un) $(stat -c %U /data/caddy/certs/x) $(stat -L -c %U /etc/shadow)"' 2>/dev/null | tail -1)
-check "FIX_PERMISSIONS repairs ownership, drops to www-data" "www-data www-data root" "$fix"
+fix=$(docker run --rm --user root -e FIX_OWNERSHIP=1 -v $VOL:/data/caddy "$IMG" sh -c 'echo "$(id -un) $(stat -c %U /data/caddy/certs/x) $(stat -L -c %U /etc/shadow)"' 2>/dev/null | tail -1)
+check "FIX_OWNERSHIP repairs ownership, drops to www-data" "www-data www-data root" "$fix"
+check "old name FIX_PERMISSIONS stops with a message" "renamed to FIX_OWNERSHIP" "$(docker run --rm -e FIX_PERMISSIONS=1 "$IMG" 2>&1 | grep -o 'renamed to FIX_OWNERSHIP')"
 docker volume rm $VOL >/dev/null
 
 # --- runtime
@@ -47,7 +48,7 @@ docker network create $NET >/dev/null
 docker run -d --name $MAIL --network $NET -p $((PORT + 2)):8025 axllent/mailpit >/dev/null
 docker run -d --name $DB --network $NET -e MARIADB_ROOT_PASSWORD=r -e MARIADB_DATABASE=wp -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11 >/dev/null
 for _ in $(seq 1 40); do docker exec $DB mariadb -uwp -pwp -e 'select 1' wp >/dev/null 2>&1 && break; sleep 2; done
-docker run -d --name $WP --network $NET -p $PORT:80 -e DISALLOW_FILE_EDIT=1 -e HSTS=max-age=300 -e MSMTP_HOST=$MAIL -e MSMTP_PORT=1025 -e MSMTP_TLS=off -e MSMTP_FROM=noreply@site.example -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
+docker run -d --name $WP --network $NET -p $PORT:80 -e UMASK=0002 -e DISALLOW_FILE_EDIT=1 -e HSTS=max-age=300 -e MSMTP_HOST=$MAIL -e MSMTP_PORT=1025 -e MSMTP_TLS=off -e MSMTP_FROM=noreply@site.example -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
 for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:$PORT/ && break; sleep 1; done
 docker exec $WP wp core install --url=http://localhost:$PORT --title=T --admin_user=a --admin_password=a --admin_email=a@example.com --skip-email >/dev/null 2>&1
 B=http://localhost:$PORT
@@ -117,6 +118,15 @@ docker exec $WP2 sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $skip_bu
 check "site's own define in WORDPRESS_CONFIG_EXTRA wins (web)" false "$(docker exec $WP2 curl -s http://127.0.0.1/skip.php)"
 check "site's own define in WORDPRESS_CONFIG_EXTRA wins (wp-cli)" false "$(docker exec $WP2 wp eval "$skip_bundled" 2>/dev/null)"
 check "no 'already defined' warning for the site's own define" 0 "$(docker logs $WP2 2>&1 | grep -ci 'already defined')"
+
+# UMASK: $WP runs with UMASK=0002, $WP2 without
+umask_probe='<?php file_put_contents(__DIR__ . "/umask-web.txt", "x"); echo substr(sprintf("%o", fileperms(__DIR__ . "/umask-web.txt")), -3);'
+for c in $WP $WP2; do docker exec $c sh -c "rm -f umask-*.txt; echo '$umask_probe' > umask.php"; done
+check "UMASK=0002: file written in a web request is 664" 664 "$(curl -s $B/umask.php)"
+check "UMASK=0002: file written by docker exec wp is 664" 664 "$(docker exec $WP wp eval 'touch(ABSPATH . "umask-cli.txt"); echo substr(sprintf("%o", fileperms(ABSPATH . "umask-cli.txt")), -3);' 2>/dev/null)"
+check "UMASK=0002: plugin/theme updates use 664/775" 664/775 "$(docker exec $WP wp eval 'require_once ABSPATH . "wp-admin/includes/file.php"; WP_Filesystem(); printf("%o/%o", FS_CHMOD_FILE, FS_CHMOD_DIR & 0777);' 2>/dev/null)"
+check "without UMASK: file written in a web request is 644" 644 "$(docker exec $WP2 curl -s http://127.0.0.1/umask.php)"
+check "without UMASK: file written by docker exec wp is 644" 644 "$(docker exec $WP2 wp eval 'touch(ABSPATH . "umask-cli.txt"); echo substr(sprintf("%o", fileperms(ABSPATH . "umask-cli.txt")), -3);' 2>/dev/null)"
 docker rm -fv $WP2 >/dev/null
 
 check "HSTS not sent over plain HTTP" 0 "$(curl -sI $B/ | grep -ci '^strict-transport-security:')"
@@ -164,6 +174,7 @@ check "message delivered via MSMTP_* relay" "FrankenPress test alice@example.org
 check "wp_mail() succeeds" true "$(docker exec $WP wp eval 'add_filter("wp_mail_from", fn() => "wordpress@site.example"); var_export(wp_mail("bob@example.org", "wp_mail test", "Hello"));' 2>/dev/null)"
 sleep 1
 check "wp_mail() arrives with the configured sender" "bob@example.org noreply@site.example" "$(m=$(curl -s "http://localhost:$((PORT + 2))/api/v1/search?query=subject:%22wp_mail%20test%22") && id=$(jq -r '.messages[0].ID' <<<"$m") && echo "$(jq -r '.messages[0].To[0].Address' <<<"$m") $(curl -s "http://localhost:$((PORT + 2))/api/v1/message/$id/headers" | jq -r '."Return-Path"[0]' | tr -d '<>')")"
+check "startup log shows the umask" 1 "$(docker logs $WP 2>&1 | grep -c 'FrankenPress: umask 0002')"
 check "startup log names the mail relay" 1 "$(docker logs $WP 2>&1 | grep -c "FrankenPress: mail is sent via $MAIL:1025")"
 check "msmtp logs the delivery to the container log" 1 "$(docker logs $WP 2>&1 | grep -c 'MSMTP .*recipients=alice@example.org.*exitcode=EX_OK')"
 
@@ -196,6 +207,7 @@ check "startup log says mail isn't configured" 1 "$(docker logs $LIM 2>&1 | grep
 check "mail() without a relay fails in a web request" false "$(curl -s "http://localhost:$((PORT + 1))/mail.php")"
 check "the failed mail is logged" 1 "$(docker logs $LIM 2>&1 | grep -c 'sendmail: no SMTP relay configured')"
 docker rm -fv $LIM >/dev/null
+check "invalid UMASK stops the container with a message" "FrankenPress: invalid UMASK 'abc'" "$(docker run --rm -e UMASK=abc "$IMG" 2>&1 | grep -o "FrankenPress: invalid UMASK 'abc'")"
 
 errs=$(docker logs $WP 2>&1 | grep -E '"level":"error"|PHP (Fatal|Warning|Parse)' | grep -v 'install root certificate' | head -3)
 check "no errors in container log" "" "$errs"

@@ -78,4 +78,39 @@ if (!$frankenpress_disabled('CORE_UPGRADE_SKIP_NEW_BUNDLED')) {
     ];
 }
 
-unset($frankenpress_enabled, $frankenpress_disabled);
+// UMASK (e.g. 0002), for sites sharing wp-content with another user through
+// a common group. The entrypoint sets it for the server and everything it
+// starts; this covers the rest:
+// - `docker exec ... wp` and other PHP CLI runs, which start with Docker's
+//   default umask instead of the entrypoint's
+// - plugin, theme and core updates, which WordPress writes with explicit
+//   permissions (FS_CHMOD_FILE/FS_CHMOD_DIR, by default derived from
+//   index.php and ABSPATH) instead of the umask. They're derived from UMASK
+//   here, if the site doesn't define them itself, in the same
+//   muplugins_loaded hook as above. Folders keep the setgid bit when
+//   wp-content has it, because a chmod without it clears it, and the other
+//   user's files in new folders would then lose the shared group.
+// Uploads take the permissions of their folder, so setgid 2775 folders
+// already give 664 uploads.
+$frankenpress_umask = getenv('UMASK');
+if (is_string($frankenpress_umask) && preg_match('/^[0-7]{3,4}$/', $frankenpress_umask)) {
+    $frankenpress_mask = octdec($frankenpress_umask);
+    if (PHP_SAPI === 'cli') {
+        umask($frankenpress_mask);
+    }
+    $GLOBALS['wp_filter']['muplugins_loaded'][10][] = [
+        'function' => static function () use ($frankenpress_mask): void {
+            if (!defined('FS_CHMOD_FILE')) {
+                define('FS_CHMOD_FILE', 0666 & ~$frankenpress_mask);
+            }
+            if (!defined('FS_CHMOD_DIR')) {
+                $setgid = (defined('WP_CONTENT_DIR') && (@fileperms(WP_CONTENT_DIR) & 02000)) ? 02000 : 0;
+                define('FS_CHMOD_DIR', (0777 & ~$frankenpress_mask) | $setgid);
+            }
+        },
+        'accepted_args' => 0,
+    ];
+    unset($frankenpress_mask);
+}
+
+unset($frankenpress_enabled, $frankenpress_disabled, $frankenpress_umask);
