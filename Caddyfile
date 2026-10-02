@@ -53,6 +53,26 @@ http://127.0.0.1:2080 {
 	respond @uploaded_php 404
 	respond @sensitive 404
 
+	# Optional: refuse XML-RPC (BLOCK_XMLRPC=1), a common password-guessing
+	# target. Off by default because Jetpack and the mobile apps still use it.
+	@xmlrpc {
+		path /xmlrpc.php
+		expression `"{$BLOCK_XMLRPC:0}" == "1"`
+	}
+	respond @xmlrpc 403
+
+	# Behind a TLS-terminating proxy, tell PHP the request was HTTPS when a
+	# trusted proxy (TRUSTED_PROXIES) says so via X-Forwarded-Proto or
+	# CloudFront-Forwarded-Proto. wp-config.php turns the marker header into
+	# $_SERVER['HTTPS']; any client-supplied copy of it is stripped first.
+	# The route keeps the two directives in this order (Caddy would otherwise
+	# run the unconditional one last).
+	@forwarded_https `{http.vars.trusted_proxy} == true && ({header.X-Forwarded-Proto}.lowerAscii().startsWith("https") || {header.CloudFront-Forwarded-Proto}.lowerAscii().startsWith("https"))`
+	route {
+		request_header -X-Frankenpress-Https
+		request_header @forwarded_https X-Frankenpress-Https on
+	}
+
 	@static {
 		file
 		path *.ico *.css *.js *.gif *.jpg *.jpeg *.png *.webp *.avif *.svg *.woff *.woff2 *.ttf
