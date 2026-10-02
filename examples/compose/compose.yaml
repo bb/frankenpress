@@ -5,7 +5,7 @@
 #   docker compose --profile tools up -d phpmyadmin   # optional, see below
 #
 # For production, pin a dated FrankenPress tag (e.g.
-# php-8.5-trixie-wp7.1.2-20261002) instead of :latest, and update it
+# php-8.5-trixie-wp7.1.2-20261004-0112) instead of :latest, and update it
 # deliberately. MariaDB instead follows its current LTS release, with the
 # data directory upgraded automatically (see the db service).
 name: frankenpress

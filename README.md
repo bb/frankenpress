@@ -37,9 +37,9 @@ All images are built on Debian 13 (Trixie) with PHP 8.5. Both variants come from
 ### Pinning a Version
 The tags above follow the weekly rebuilds. To pin a deployment, or roll back after an update, use the version-specific tags published with every build:
 - `bock/frankenpress:php-8.5-trixie-wp7.1.2`: a specific WordPress version, still updated by the weekly rebuilds of that version
-- `bock/frankenpress:php-8.5-trixie-wp7.1.2-20261004`: one specific build (WordPress version plus build date)
+- `bock/frankenpress:php-8.5-trixie-wp7.1.2-20261004-0112`: one specific build (WordPress version plus build date and UTC time). Builds before 2026-10-03 have only the date, e.g. `-20261002`, which the last build of that day overwrote
 
-The same pattern applies to the VIPS images, e.g. `php-8.5-vips-ffi-trixie-wp7.1.2-20261004`. See the [tag list on Docker Hub](https://hub.docker.com/r/bock/frankenpress/tags) for available builds.
+The same pattern applies to the VIPS images, e.g. `php-8.5-vips-ffi-trixie-wp7.1.2-20261004-0112`. See the [tag list on Docker Hub](https://hub.docker.com/r/bock/frankenpress/tags) for available builds.
 
 ## Performance & Build Optimization
 
