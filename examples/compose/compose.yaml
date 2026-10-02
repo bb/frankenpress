@@ -4,8 +4,10 @@
 #   docker compose up -d
 #   docker compose --profile tools up -d phpmyadmin   # optional, see below
 #
-# For production, pin a dated image tag (e.g. php-8.5-trixie-wp7.1.2-20261002)
-# instead of :latest, and update it deliberately.
+# For production, pin a dated FrankenPress tag (e.g.
+# php-8.5-trixie-wp7.1.2-20261002) instead of :latest, and update it
+# deliberately. MariaDB instead follows its current LTS release, with the
+# data directory upgraded automatically (see the db service).
 name: frankenpress
 
 services:
@@ -49,9 +51,14 @@ services:
         condition: service_healthy
 
   db:
-    image: mariadb:11.8
+    image: mariadb:lts
     restart: unless-stopped
     environment:
+      # Upgrade the data directory (after backing up the system tables) when
+      # the image moves to a new major version. Without it, e.g.
+      # mariadb-dump --routines fails with "Column count of mysql.proc is
+      # wrong". Remove or comment out this line to upgrade manually.
+      MARIADB_AUTO_UPGRADE: "1"
       MARIADB_DATABASE: ${DB_NAME:-wordpress}
       MARIADB_USER: ${DB_USER:-wordpress}
       MARIADB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}

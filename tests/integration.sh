@@ -7,12 +7,12 @@
 # the hardening rules, proxy handling and image processing. Needs Docker and
 # curl, jq and python3; exits non-zero if any check fails.
 set -u
-IMG=$1; VARIANT=$2; NET=fpt-$$; WP=fpwp-$$; DB=fpdb-$$; MAIL=fpmail-$$; PORT=${PORT:-18081}
+IMG=$1; VARIANT=$2; NET=fpt-$$; WP=fpwp-$$; WP2=fpwp2-$$; DB=fpdb-$$; MAIL=fpmail-$$; PORT=${PORT:-18081}
 fail=0
 check() { # check <description> <expected> <actual>
   if [ "$2" = "$3" ]; then printf "  ok    %-52s %s\n" "$1" "$3"; else printf "  FAIL  %-52s expected=%s got=%s\n" "$1" "$2" "$3"; fail=1; fi
 }
-cleanup() { docker rm -fv $WP $DB $MAIL >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
+cleanup() { docker rm -fv $WP $WP2 $DB $MAIL >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
 trap cleanup EXIT
 
 echo "=== $IMG ($VARIANT)"
@@ -105,6 +105,20 @@ check "/wp-json/ with pretty permalinks" yes "$(curl -s $B/wp-json/ | grep -q '"
 
 docker exec $WP sh -c 'echo "<?php require __DIR__ . \"/wp-load.php\"; echo (defined(\"DISALLOW_FILE_EDIT\") && DISALLOW_FILE_EDIT) ? \"on\" : \"off\";" > dfe.php'
 check "DISALLOW_FILE_EDIT=1 applied" on "$(curl -s $B/dfe.php)"
+# CORE_UPGRADE_SKIP_NEW_BUNDLED: on by default, and a site's own define in
+# WORDPRESS_CONFIG_EXTRA wins without "Constant already defined" warnings
+skip_bundled='echo defined("CORE_UPGRADE_SKIP_NEW_BUNDLED") ? var_export(CORE_UPGRADE_SKIP_NEW_BUNDLED, true) : "undefined";'
+docker exec $WP sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $skip_bundled' > skip.php"
+check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (web)" true "$(curl -s $B/skip.php)"
+check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (wp-cli)" true "$(docker exec $WP wp eval "$skip_bundled" 2>/dev/null)"
+docker run -d --name $WP2 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e "WORDPRESS_CONFIG_EXTRA=define('CORE_UPGRADE_SKIP_NEW_BUNDLED', false);" "$IMG" >/dev/null
+for _ in $(seq 1 30); do docker exec $WP2 curl -s -o /dev/null http://127.0.0.1/healthz 2>/dev/null && break; sleep 1; done
+docker exec $WP2 sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $skip_bundled' > skip.php"
+check "site's own define in WORDPRESS_CONFIG_EXTRA wins (web)" false "$(docker exec $WP2 curl -s http://127.0.0.1/skip.php)"
+check "site's own define in WORDPRESS_CONFIG_EXTRA wins (wp-cli)" false "$(docker exec $WP2 wp eval "$skip_bundled" 2>/dev/null)"
+check "no 'already defined' warning for the site's own define" 0 "$(docker logs $WP2 2>&1 | grep -ci 'already defined')"
+docker rm -fv $WP2 >/dev/null
+
 check "HSTS not sent over plain HTTP" 0 "$(curl -sI $B/ | grep -ci '^strict-transport-security:')"
 check "HSTS sent when proxy forwards HTTPS" "max-age=300" "$(curl -sI -H 'X-Forwarded-Proto: https' $B/ | grep -i '^strict-transport-security:' | cut -d' ' -f2- | tr -d '\r')"
 check "brotli" br "$(curl -s -H 'Accept-Encoding: br' -o /dev/null -w '%header{content-encoding}' $B/)"
