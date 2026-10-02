@@ -63,6 +63,8 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
 - **[Caddy](https://caddyserver.com/)** - Fast, secure web server with automatic HTTPS
 - **PHP Extensions** - Optimized selection for WordPress performance
 
+There is no built-in page cache. Use a caching plugin, and Redis for the object cache, as in the [compose example](examples/compose/compose.yaml). Variables such as `CACHE_LOC`, `TTL`, `PURGE_*`, `BYPASS_*` or `CACHE_RESPONSE_CODES` from older FrankenWP examples have no effect.
+
 ### PHP Extensions & Caching
 
 **Performance & Caching:**
@@ -93,14 +95,18 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
 - `SERVER_NAME`: the addresses to listen on. Defaults to `:80`: plain HTTP for any hostname, which is what a container behind a load balancer or reverse proxy needs. For HTTPS, set your hostname(s), e.g. `example.com` or `example.com, :80`; real hostnames get a publicly trusted certificate (Let's Encrypt/ZeroSSL) automatically, `localhost` and IP addresses use Caddy's local CA
 - `TIMEOUT_READ_HEADER`, `TIMEOUT_READ_BODY`, `TIMEOUT_WRITE`, `TIMEOUT_IDLE`: how long a client may take to send its headers (default `10s`) and body (`10m`), how long PHP plus sending the response may take (`10m`), and how long idle keep-alive connections stay open (`5m`). Bounds slow or stalled clients, which would otherwise hold PHP threads
 - `REQUEST_BODY_MAX_BYTES`: requests announcing a larger body get 413 before PHP starts on them. Defaults to `536870912` (512 MiB, matching `upload_max_filesize`/`post_max_size`); raise it together with those PHP settings
-- `CADDY_GLOBAL_OPTIONS`: inject global options (debug most common)
+- `CADDY_GLOBAL_OPTIONS`: inserted into Caddy's global options block, e.g. `email admin@example.com` for the Let's Encrypt account or `debug`
+- `CADDY_SERVER_EXTRA_DIRECTIVES`: inserted into the site block, before WordPress handles the request, e.g. `header /wp-content/uploads/* Cache-Control "public, max-age=31536000, immutable"`
+- `CADDY_EXTRA_CONFIG`: inserted at the top level of the Caddyfile, e.g. an extra site block. See [Custom Caddy Configuration](#custom-caddy-configuration)
 - `FRANKENPHP_CONFIG`: inject config under the frankenphp directive
 - `TRUSTED_PROXIES`: proxies whose `X-Forwarded-For` header is trusted for the client IP, as space-separated CIDRs. Defaults to `private_ranges` (10/8, 172.16/12, 192.168/16, 127/8 and their IPv6 equivalents). Set it to your load balancer's range so other hosts on a private network can't spoof their IP. Trusted proxies can also mark a request as HTTPS via `X-Forwarded-Proto` or `CloudFront-Forwarded-Proto`
 - `FIX_PERMISSIONS`: set to `1` and start the container as root (`--user root`, or `user: root` in compose) to repair ownership of mounted folders at startup. Useful when bind mounts or platforms like AWS ECS hand the container root-owned folders, so uploads or certificates can't be written. Files not owned by the web user in `/var/www/html`, `/data/caddy` and `/config/caddy` are chowned (symlinks themselves, never their targets), then the server drops to `www-data`. Without `FIX_PERMISSIONS`, the image runs as `www-data` as before
 - `HSTS`: set to a `Strict-Transport-Security` value, e.g. `max-age=31536000`, to send HSTS on HTTPS requests (direct or forwarded by a trusted proxy). Off by default; add `; includeSubDomains` only if every subdomain serves HTTPS
 - `BLOCK_XMLRPC`: set to `1` to refuse `xmlrpc.php` (403), a common password-guessing target. Off by default because Jetpack and the WordPress mobile apps still use it
 
-#### Wordpress
+#### WordPress
+
+The official image's entrypoint creates `wp-config.php` from these variables and supports more: the keys and salts (`WORDPRESS_AUTH_KEY`, …), `WORDPRESS_DB_CHARSET`, and `_FILE` variants for secrets. See [the official image](https://hub.docker.com/_/wordpress) for the full list.
 
 - `WORDPRESS_DB_NAME`: The WordPress database name.
 - `WORDPRESS_DB_USER`: The WordPress database user.
@@ -111,9 +117,10 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
 - `FORCE_HTTPS`: Set to `1` to tell WordPress every request is HTTPS. Usually not needed behind a load balancer that terminates TLS, since requests a trusted proxy forwards as HTTPS are detected automatically (see `TRUSTED_PROXIES`). Defaults to `0`.
 - `DISALLOW_FILE_EDIT`: set to `1` to turn off the theme and plugin code editors in wp-admin, so a stolen admin login can't be turned into running PHP through them. Recommended for production
 - `DISABLE_WP_CRON`: set to `1` to stop WordPress from running scheduled tasks on page loads, when you run them from a real scheduler instead, e.g. `wp cron event run --due-now` every few minutes
+- `CORE_UPGRADE_SKIP_NEW_BUNDLED`: on by default, so core updates don't install new default themes and plugins into `wp-content`. Set to `0` to turn it off. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value
+- `WORDPRESS_CONFIG_EXTRA`: PHP added to `wp-config.php` when it's created, e.g. `define('WP_HOME', 'https://example.com');`
 
-`FORCE_HTTPS`, `DISALLOW_FILE_EDIT` and `DISABLE_WP_CRON` are applied before every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created. Don't also define `DISALLOW_FILE_EDIT` or `DISABLE_WP_CRON` in `WORDPRESS_CONFIG_EXTRA`.
-- `WORDPRESS_CONFIG_EXTRA`: use this for adding WP_HOME, WP_SITEURL, etc
+`FORCE_HTTPS`, `DISALLOW_FILE_EDIT`, `DISABLE_WP_CRON` and `CORE_UPGRADE_SKIP_NEW_BUNDLED` are applied on every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created. Don't also define `DISALLOW_FILE_EDIT` or `DISABLE_WP_CRON` in `WORDPRESS_CONFIG_EXTRA`.
 
 ### WP-CLI
 
@@ -121,11 +128,32 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
 
     docker exec <container> wp plugin list
 
-### Healthcheck
+### Custom Caddy Configuration
 
-`/healthz` answers `ok` straight from Caddy, without PHP or the database, for load balancers and uptime checks.
+`CADDY_SERVER_EXTRA_DIRECTIVES` and `CADDY_EXTRA_CONFIG` take Caddyfile syntax. A block with braces needs several lines; Caddy doesn't accept it on one. In compose, use `|`. For example, serving `image.jpg.webp` instead of `image.jpg` to browsers that accept WebP (the layout of WebP plugins such as WebP Express):
 
-The image's `HEALTHCHECK` runs a tiny PHP script on an internal port (`127.0.0.1:2080`, not reachable from outside the container). The container is healthy when Caddy answers and PHP executes, independent of `SERVER_NAME` and of the database, so a database outage doesn't make orchestrators restart it.
+```yaml
+    environment:
+      CADDY_SERVER_EXTRA_DIRECTIVES: |
+        @webp {
+          header Accept *image/webp*
+          path *.jpg *.jpeg *.png
+          file {path}.webp
+        }
+        rewrite @webp {path}.webp
+        header @webp Vary Accept
+      CADDY_EXTRA_CONFIG: |
+        www.example.com {
+          redir https://example.com{uri} permanent
+        }
+```
+
+### Health Endpoints
+
+- **`/healthz`:** answered by Caddy without PHP or the database, on every site. For load balancers and uptime monitors; it only says the container serves HTTP.
+- **`127.0.0.1:2080/healthz.php`:** internal, not reachable from outside the container. The image's Docker `HEALTHCHECK` uses it: healthy when Caddy answers and PHP executes, independent of `SERVER_NAME` and the database, so a database outage doesn't make orchestrators restart the container.
+
+Because `/healthz` is answered before WordPress, no page, post or other content can use that path.
 
 ## Sending Email
 
@@ -173,6 +201,32 @@ At startup the container logs where mail goes, or `mail is NOT configured`. Each
 
 SMTP or API plugins (FluentSMTP, WP Mail SMTP, …) send on their own and take precedence over these settings when installed.
 
+## Upgrading and Migrating
+
+Pulling a newer image and recreating the container doesn't update WordPress core in an existing `/var/www/html` volume. WordPress updates itself there.
+
+`docker compose up -V` (`--renew-anon-volumes`) replaces core with the image's bundled version, which can be older than what the site already runs.
+
+Before recreating a container, check that no update is running. `docker compose exec wordpress find /var/www/html -maxdepth 1 -name .maintenance -mmin -10` prints a file if one started in the last 10 minutes; recreating mid-update leaves the site in maintenance mode.
+
+### From the official `wordpress` image
+
+If the old project bind-mounted `/var/www/html`, compose keeps that mount even after you remove it from the file, because the image declares the path a `VOLUME`. Cut over with:
+
+    docker compose up -d --force-recreate --renew-anon-volumes wordpress
+
+Then check that `/var/www/html` is a volume, not the old bind mount:
+
+    docker inspect --format '{{range .Mounts}}{{.Type}} {{.Destination}}{{println}}{{end}}' <container>
+
+A fresh core volume copies WordPress's bundled extras (Akismet, Hello Dolly, the default themes) into `wp-content`. You can delete the ones you don't use.
+
+### MariaDB
+
+The [compose example](examples/compose/compose.yaml) follows MariaDB's current LTS release (`mariadb:lts`) with `MARIADB_AUTO_UPGRADE` on, so the data directory is upgraded when the image moves to a new major version; the image backs up the system tables first. The upgrade is one-way, so take a dump before a major jump anyway:
+
+    docker compose exec db sh -c 'mariadb-dump -uroot -p"$MARIADB_ROOT_PASSWORD" --all-databases --routines --triggers' > backup.sql
+
 ## Extending the Image
 
 The published image has no compiler. To add a PHP extension in your own image, install the build tools for that step, as listed in `$PHPIZE_DEPS`, then remove them again:
@@ -212,13 +266,13 @@ The standard WordPress images are a good starting point and can handle many use 
 
 ### Why FrankenPHP?
 
-FrankenPHP is built on Caddy, a modern web server built in Go. It is secure & performs well when scaling becomes important. It also allows us to take advantage of built-in mature concurrency through goroutines into a single Docker image. high performance in a single lean image.
+FrankenPHP is built on Caddy, a modern web server written in Go. It's secure, performs well when scaling becomes important, and runs PHP in Go's mature concurrency model, all in a single Docker image.
 
 **[Check out FrankenPHP Here](https://frankenphp.dev/ "FrankenPHP")**
 
 ### Why is Non-Root User Important?
 
-It is good practice to avoid using root users in your Docker images for security purposes. If a questionable individual gets access into your running Docker container with root account then they could have access to the cluster and all the resources it manages. This could be problematic. On the other hand, by creating a user specific to the Docker image, narrows the threat to only the image itself. It is also important to note that the base WordPress images also create non-root users by default.
+An attacker who gets code running in a root container has a much easier path to the host and everything it manages. Running as `www-data` limits a compromise to what that user can do inside the container.
 
 
 ### How to use when behind load balancer or proxy?
