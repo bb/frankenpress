@@ -100,7 +100,7 @@ There is no built-in page cache. Use a caching plugin, and Redis for the object 
 - `CADDY_EXTRA_CONFIG`: inserted at the top level of the Caddyfile, e.g. an extra site block. See [Custom Caddy Configuration](#custom-caddy-configuration)
 - `FRANKENPHP_CONFIG`: inject config under the frankenphp directive
 - `TRUSTED_PROXIES`: proxies whose `X-Forwarded-For` header is trusted for the client IP, as space-separated CIDRs. Defaults to `private_ranges` (10/8, 172.16/12, 192.168/16, 127/8 and their IPv6 equivalents). Set it to your load balancer's range so other hosts on a private network can't spoof their IP. Trusted proxies can also mark a request as HTTPS via `X-Forwarded-Proto` or `CloudFront-Forwarded-Proto`
-- `FIX_PERMISSIONS`: set to `1` and start the container as root (`--user root`, or `user: root` in compose) to repair ownership of mounted folders at startup. Useful when bind mounts or platforms like AWS ECS hand the container root-owned folders, so uploads or certificates can't be written. Files not owned by the web user in `/var/www/html`, `/data/caddy` and `/config/caddy` are chowned (symlinks themselves, never their targets), then the server drops to `www-data`. Without `FIX_PERMISSIONS`, the image runs as `www-data` as before
+- `FIX_OWNERSHIP`: set to `1` and start the container as root (`--user root`, or `user: root` in compose) to repair ownership of mounted folders at startup. Useful when bind mounts or platforms like AWS ECS hand the container root-owned folders, so uploads or certificates can't be written. Files not owned by the web user in `/var/www/html`, `/data/caddy` and `/config/caddy` are chowned (symlinks themselves, never their targets), then the server drops to `www-data`. Without `FIX_OWNERSHIP`, the image runs as `www-data` as before. Images from 2026-10-02 called it `FIX_PERMISSIONS`; that name now stops the container with a message
 - `UMASK`: file creation mask, e.g. `0002` for group-writable files. Unset keeps `0022`. See [Sharing wp-content with another user](#sharing-wp-content-with-another-user)
 - `HSTS`: set to a `Strict-Transport-Security` value, e.g. `max-age=31536000`, to send HSTS on HTTPS requests (direct or forwarded by a trusted proxy). Off by default; add `; includeSubDomains` only if every subdomain serves HTTPS
 - `BLOCK_XMLRPC`: set to `1` to refuse `xmlrpc.php` (403), a common password-guessing target. Off by default because Jetpack and the WordPress mobile apps still use it
@@ -218,7 +218,7 @@ Other commands started with `docker exec`, e.g. a shell, still use Docker's defa
 
 Don't replace the command with `sh -c "umask 0002; exec frankenphp …"`: the image then skips its setup, so a fresh volume gets no WordPress and the startup log stays silent.
 
-`FIX_PERMISSIONS` changes ownership only, never permissions.
+`FIX_OWNERSHIP` changes ownership only, never permissions.
 
 ## Upgrading and Migrating
 

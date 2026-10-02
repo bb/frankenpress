@@ -31,14 +31,15 @@ check "memory_limit" 256M "$(docker run --rm "$IMG" php -r 'echo ini_get("memory
 check "real hostname uses ACME, not internal CA" "" "$(docker run --rm -e SERVER_NAME=example.com --entrypoint frankenphp "$IMG" adapt --config /etc/caddy/Caddyfile 2>/dev/null | grep -o '"module":"internal"')"
 check "max_input_vars" 5000 "$(docker run --rm "$IMG" php -r 'echo ini_get("max_input_vars");')"
 
-# FIX_PERMISSIONS: a root-owned volume (with a symlink planted in it) gets
+# FIX_OWNERSHIP: a root-owned volume (with a symlink planted in it) gets
 # repaired at startup, then the process drops to www-data
 VOL=fpvol-$$
 docker volume create $VOL >/dev/null
 docker run --rm -v $VOL:/data/caddy --entrypoint sh "$IMG" -c 'exit 0' >/dev/null 2>&1
 docker run --rm --user root -v $VOL:/data/caddy --entrypoint sh "$IMG" -c 'mkdir -p /data/caddy/certs && touch /data/caddy/certs/x && ln -s /etc/shadow /data/caddy/link && chown -R root:root /data/caddy'
-fix=$(docker run --rm --user root -e FIX_PERMISSIONS=1 -v $VOL:/data/caddy "$IMG" sh -c 'echo "$(id -un) $(stat -c %U /data/caddy/certs/x) $(stat -L -c %U /etc/shadow)"' 2>/dev/null | tail -1)
-check "FIX_PERMISSIONS repairs ownership, drops to www-data" "www-data www-data root" "$fix"
+fix=$(docker run --rm --user root -e FIX_OWNERSHIP=1 -v $VOL:/data/caddy "$IMG" sh -c 'echo "$(id -un) $(stat -c %U /data/caddy/certs/x) $(stat -L -c %U /etc/shadow)"' 2>/dev/null | tail -1)
+check "FIX_OWNERSHIP repairs ownership, drops to www-data" "www-data www-data root" "$fix"
+check "old name FIX_PERMISSIONS stops with a message" "renamed to FIX_OWNERSHIP" "$(docker run --rm -e FIX_PERMISSIONS=1 "$IMG" 2>&1 | grep -o 'renamed to FIX_OWNERSHIP')"
 docker volume rm $VOL >/dev/null
 
 # --- runtime

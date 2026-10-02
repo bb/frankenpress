@@ -11,9 +11,16 @@
 # does nothing extra. Bind mounts and some platforms (e.g. AWS ECS) hand the
 # container root-owned folders, so uploads or Caddy's certificate storage
 # aren't writable. For that case, start the container as root with
-# FIX_PERMISSIONS=1: files not owned by the web user get chowned, then the
+# FIX_OWNERSHIP=1: files not owned by the web user get chowned, then the
 # process drops to that user for good.
 set -euo pipefail
+
+# FIX_OWNERSHIP was briefly called FIX_PERMISSIONS (it only ever changed
+# ownership). Stop loudly instead of silently skipping the repair.
+if [ -n "${FIX_PERMISSIONS:-}" ]; then
+    echo "FrankenPress: FIX_PERMISSIONS has been renamed to FIX_OWNERSHIP (it changes ownership, not permissions); set FIX_OWNERSHIP=1 instead" >&2
+    exit 1
+fi
 
 if [ -n "${UMASK:-}" ]; then
     if [[ ! "$UMASK" =~ ^[0-7]{3,4}$ ]]; then
@@ -38,7 +45,7 @@ if [[ "${1:-}" == frankenphp* ]]; then
     fi
 fi
 
-if [ "$(id -u)" = 0 ] && [ "${FIX_PERMISSIONS:-0}" = 1 ]; then
+if [ "$(id -u)" = 0 ] && [ "${FIX_OWNERSHIP:-0}" = 1 ]; then
     user="${FRANKENPRESS_USER:-www-data}"
     group="$(id -gn "$user")"
 
