@@ -16,6 +16,7 @@ Open items from the image review and the comparison with
 
 ## Low
 
+- [ ] **Make dated tags unique per build.** `php-8.5-trixie-wp7.1.2-YYYYMMDD` is overwritten when several builds publish on the same day (2026-10-02 had three), so a dated tag isn't a fixed point. Add the time or the run number, e.g. `-20261002.2`.
 - [ ] **Reduce OpenEXR in the VIPS image.** The standard image no longer contains OpenEXR, but libvips itself depends on it, so the VIPS image still carries its 22 HIGH/CRITICAL findings. Check whether `VIPS_BLOCK_UNTRUSTED` already keeps uploads away from libvips's EXR loader. If it doesn't, check whether blocking `exrload` with `vips_operation_block_set` is practical.
 - [ ] **Decide on notglossy/frankenpress#17.** That upstream PR only has the first upgrade commit; later fixes are only here. Update it, open a new one, or close it.
 - [ ] **Clean up the stuck workflow runs.** Runs `36923747112`, `36925200760` and `36925308009` have been "queued" since 2026-10-01. The API can neither cancel nor delete them; ask GitHub Support.
