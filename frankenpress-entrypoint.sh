@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# FrankenPress entrypoint: logs the mail setup, optionally repairs ownership
-# of mounted folders, then hands over to the official WordPress entrypoint.
+# FrankenPress entrypoint: applies UMASK, logs the mail setup, optionally
+# repairs ownership of mounted folders, then hands over to the official
+# WordPress entrypoint.
+#
+# UMASK (e.g. 0002) sets the file creation mask for FrankenPHP, PHP and
+# everything they start, for sites that share wp-content with another user
+# through a common group. Unset keeps the default (0022).
 #
 # The image runs as $FRANKENPRESS_USER (www-data) by default and this script
 # does nothing extra. Bind mounts and some platforms (e.g. AWS ECS) hand the
@@ -9,6 +14,14 @@
 # FIX_PERMISSIONS=1: files not owned by the web user get chowned, then the
 # process drops to that user for good.
 set -euo pipefail
+
+if [ -n "${UMASK:-}" ]; then
+    if [[ ! "$UMASK" =~ ^[0-7]{3,4}$ ]]; then
+        echo "FrankenPress: invalid UMASK '$UMASK'; use three or four octal digits, e.g. 0002" >&2
+        exit 1
+    fi
+    umask "$UMASK"
+fi
 
 # Say once at server start where mail goes, so a missing relay isn't silent
 # (WordPress would otherwise fail every wp_mail() without telling anyone).
@@ -19,6 +32,9 @@ if [[ "${1:-}" == frankenphp* ]]; then
         echo "FrankenPress: mail is sent via ${MSMTP_HOST:-<MSMTP_HOST_FILE>}:${MSMTP_PORT:-587}"
     else
         echo "FrankenPress: mail is NOT configured; WordPress can't send email until MSMTP_HOST is set (or set MSMTP=off to disable mail)" >&2
+    fi
+    if [ -n "${UMASK:-}" ]; then
+        echo "FrankenPress: umask $UMASK"
     fi
 fi
 
