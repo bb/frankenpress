@@ -11,7 +11,7 @@ Open items from the image review and the comparison with
 
 ## Medium
 
-- [ ] **Set `DOCKERHUB_DESCRIPTION_TOKEN`.** The Docker Hub description sync failed with `Forbidden` on its first run: it needs a token with the "Read, Write, Delete" scope, and the publishing token is only "Read & Write". Create one at https://app.docker.com → Personal access tokens, then run `gh secret set DOCKERHUB_DESCRIPTION_TOKEN --repo bb/frankenpress`, then re-run the "Update Docker Hub Description" workflow.
+- [ ] **Confirm the first Dependabot docker run.** Check that Dependabot picks up the digest-pinned `FROM` lines (Insights → Dependency graph → Dependabot) and opens pull requests when a base image changes.
 - [ ] **Confirm the first keepalive run** (scheduled Sunday 2026-10-04, 01:00 UTC). Check that the `keepalive` job succeeds and the workflow stays `active`.
 
 ## Low

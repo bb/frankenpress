@@ -20,22 +20,21 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Build Arguments
+# Base Images
 # -----------------------------------------------------------------------------
-# These can be overridden at build time using --build-arg
-# Example: docker build --build-arg PHP_VERSION=8.5 --target vips-ffi .
-ARG WORDPRESS_VERSION=latest
-ARG PHP_VERSION=8.5
-ARG DEBIAN_VERSION=trixie
-# FrankenPHP major version; minor/patch (and PHP patch) updates are picked up on rebuild
-ARG FRANKENPHP_VERSION=1
+# Every base image is pinned to a digest, so a build always uses exactly the
+# images recorded here, and a replaced tag upstream can't change it silently.
+# Dependabot (.github/dependabot.yml) opens a pull request when a tag points
+# at a new digest or a newer version tag appears; CI tests it before merging.
+# The tags below also select the versions: WordPress 7.1.2, FrankenPHP 1.x
+# with PHP 8.5 on Debian 13 (Trixie).
 
 # -----------------------------------------------------------------------------
 # Stage 1: WordPress Source Files
 # -----------------------------------------------------------------------------
 # Pull WordPress core files from the official WordPress Docker image
 # This stage is used only to extract files, not run WordPress
-FROM wordpress:$WORDPRESS_VERSION AS wp
+FROM wordpress:7.1.2@sha256:4abf7a450ee477dde967584f8174d7e03221d224c4971a0c38d84e7254426e64 AS wp
 
 # -----------------------------------------------------------------------------
 # Stage 2: PHP Build
@@ -45,9 +44,9 @@ FROM wordpress:$WORDPRESS_VERSION AS wp
 # the file watcher library and install-php-extensions. It also carries a full
 # compiler toolchain (~250 MB), which is why only its /usr/local is copied
 # into the final image.
-# Format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_VERSION} (multi-arch)
+# Tag format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_CODENAME} (multi-arch)
 # See: https://hub.docker.com/r/dunglas/frankenphp
-FROM dunglas/frankenphp:${FRANKENPHP_VERSION}-php${PHP_VERSION}-${DEBIAN_VERSION} AS php-build
+FROM dunglas/frankenphp:1-php8.5-trixie@sha256:81231b570830952baa3e62db06707996a886ff0a61ca64c77d032c8a110e6bc1 AS php-build
 
 # bash with pipefail, so a library without a Debian package fails the build
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -109,7 +108,8 @@ RUN install-php-extensions \
 # -----------------------------------------------------------------------------
 # Stage 3: Standard FrankenPress Image
 # -----------------------------------------------------------------------------
-FROM debian:${DEBIAN_VERSION}-slim AS standard
+# Must be the same Debian release as the php-build stage above
+FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS standard
 
 # -----------------------------------------------------------------------------
 # Metadata Labels
@@ -253,8 +253,10 @@ RUN curl -fsSL -o /usr/local/bin/wp \
 # 2. Set ownership of the Caddy and web root directories
 #
 # NOTE: On some platforms (e.g., AWS ECS), volume mounts are owned by root.
-# You may need to use USER_NAME=root or modify the entrypoint to chown volumes.
+# Start the container as root with FIX_PERMISSIONS=1 to repair ownership at
+# startup and then drop to USER_NAME (see frankenpress-entrypoint.sh).
 ARG USER_NAME=www-data
+ENV FRANKENPRESS_USER=${USER_NAME}
 
 RUN if id "${USER_NAME}" >/dev/null 2>&1; then \
         echo "User ${USER_NAME} already exists"; \
@@ -278,6 +280,7 @@ RUN if id "${USER_NAME}" >/dev/null 2>&1; then \
 # extensions here (e.g. OPcache is built into PHP 8.5 and can't be loaded).
 COPY --from=wp --chown=${USER_NAME}:${USER_NAME} /usr/src/wordpress /usr/src/wordpress
 COPY --from=wp --chown=${USER_NAME}:${USER_NAME} /usr/local/bin/docker-entrypoint.sh /usr/local/bin/
+COPY --chmod=755 frankenpress-entrypoint.sh /usr/local/bin/frankenpress-entrypoint.sh
 
 # -----------------------------------------------------------------------------
 # WordPress and Entrypoint Customization
@@ -336,17 +339,18 @@ USER $USER_NAME
 # -----------------------------------------------------------------------------
 # Entrypoint and Command
 # -----------------------------------------------------------------------------
-# Entrypoint: WordPress initialization script (copies core files, sets up db)
+# Entrypoint: optional ownership repair (FIX_PERMISSIONS=1 when started as
+# root), then the WordPress initialization script (copies core files, sets up db)
 # Command: Start FrankenPHP server with Caddy configuration
 #
-# The entrypoint handles:
+# The WordPress entrypoint handles:
 # - Copying WordPress core files to /var/www/html if not present
 # - Generating wp-config.php from environment variables
 # - Database connection and installation
 #
 # To override the command (e.g., for debugging):
 # docker run -it frankenpress bash
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/frankenpress-entrypoint.sh"]
 CMD ["frankenphp", "run", "--config", "/etc/caddy/Caddyfile"]
 
 # -----------------------------------------------------------------------------
