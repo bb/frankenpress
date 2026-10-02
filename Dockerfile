@@ -286,16 +286,17 @@ COPY --chmod=755 frankenpress-entrypoint.sh /usr/local/bin/frankenpress-entrypoi
 # WordPress and Entrypoint Customization
 # -----------------------------------------------------------------------------
 # Modify the WordPress Docker entrypoint to work with FrankenPHP instead of PHP-FPM.
-# Also inject WordPress configuration:
-# - HTTPS: on when FORCE_HTTPS is set, or when Caddy marked the request as
-#   forwarded over HTTPS by a trusted proxy (see the Caddyfile)
+# Also inject WordPress configuration for new sites:
 # - FS_METHOD=direct: Direct filesystem access (no FTP needed)
 # - set_time_limit(300): Allow long-running operations (imports, updates, etc.)
+# HTTPS detection and the DISALLOW_FILE_EDIT/DISABLE_WP_CRON switches live in
+# frankenpress-prepend.php instead, so they also reach existing sites, whose
+# wp-config.php the entrypoint never rewrites.
 RUN sed -i \
         -e 's/\[ "$1" = '\''php-fpm'\'' \]/\[\[ "$1" == frankenphp* \]\]/g' \
         -e 's/php-fpm/frankenphp/g' \
         /usr/local/bin/docker-entrypoint.sh \
-    && sed -i 's/<?php/<?php if (!!getenv("FORCE_HTTPS") || ($_SERVER["HTTP_X_FRANKENPRESS_HTTPS"] ?? "") === "on") { \$_SERVER["HTTPS"] = "on"; } define( "FS_METHOD", "direct" ); set_time_limit(300); /g' /usr/src/wordpress/wp-config-docker.php
+    && sed -i 's/<?php/<?php define( "FS_METHOD", "direct" ); set_time_limit(300); /g' /usr/src/wordpress/wp-config-docker.php
 
 # -----------------------------------------------------------------------------
 # Custom Configuration Files
@@ -308,10 +309,12 @@ RUN sed -i \
 # - imagemagick-policy.xml: limits Imagick to the formats WordPress needs
 # - wp-cli.yml: points WP-CLI at the site, so `wp` works from any directory
 # - healthz.php: served only on 127.0.0.1:2080 for the HEALTHCHECK below
+# - prepend.php: runtime settings loaded before every request (php.ini)
 COPY php.ini $PHP_INI_DIR/conf.d/wp.ini
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY imagemagick-policy.xml /etc/ImageMagick-7/policy.xml
 COPY wp-cli.yml /usr/local/etc/wp-cli.yml
+COPY frankenpress-prepend.php /usr/local/share/frankenpress/prepend.php
 ENV WP_CLI_CONFIG_PATH=/usr/local/etc/wp-cli.yml
 RUN mkdir -p /usr/local/share/frankenpress/health \
     && echo '<?php echo "ok";' > /usr/local/share/frankenpress/health/healthz.php

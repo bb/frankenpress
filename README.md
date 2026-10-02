@@ -90,11 +90,14 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
 
 #### FrankenPHP
 
-- `SERVER_NAME`: change the addresses on which to listen. Real hostnames get a publicly trusted certificate (Let's Encrypt/ZeroSSL) automatically; `localhost` and IP addresses use Caddy's local CA
+- `SERVER_NAME`: the addresses to listen on. Defaults to `:80`: plain HTTP for any hostname, which is what a container behind a load balancer or reverse proxy needs. For HTTPS, set your hostname(s), e.g. `example.com` or `example.com, :80`; real hostnames get a publicly trusted certificate (Let's Encrypt/ZeroSSL) automatically, `localhost` and IP addresses use Caddy's local CA
+- `TIMEOUT_READ_HEADER`, `TIMEOUT_READ_BODY`, `TIMEOUT_WRITE`, `TIMEOUT_IDLE`: how long a client may take to send its headers (default `10s`) and body (`10m`), how long PHP plus sending the response may take (`10m`), and how long idle keep-alive connections stay open (`5m`). Bounds slow or stalled clients, which would otherwise hold PHP threads
+- `REQUEST_BODY_MAX_BYTES`: requests announcing a larger body get 413 before PHP starts on them. Defaults to `536870912` (512 MiB, matching `upload_max_filesize`/`post_max_size`); raise it together with those PHP settings
 - `CADDY_GLOBAL_OPTIONS`: inject global options (debug most common)
 - `FRANKENPHP_CONFIG`: inject config under the frankenphp directive
 - `TRUSTED_PROXIES`: proxies whose `X-Forwarded-For` header is trusted for the client IP, as space-separated CIDRs. Defaults to `private_ranges` (10/8, 172.16/12, 192.168/16, 127/8 and their IPv6 equivalents). Set it to your load balancer's range so other hosts on a private network can't spoof their IP. Trusted proxies can also mark a request as HTTPS via `X-Forwarded-Proto` or `CloudFront-Forwarded-Proto`
 - `FIX_PERMISSIONS`: set to `1` and start the container as root (`--user root`, or `user: root` in compose) to repair ownership of mounted folders at startup. Useful when bind mounts or platforms like AWS ECS hand the container root-owned folders, so uploads or certificates can't be written. Files not owned by the web user in `/var/www/html`, `/data/caddy` and `/config/caddy` are chowned (symlinks themselves, never their targets), then the server drops to `www-data`. Without `FIX_PERMISSIONS`, the image runs as `www-data` as before
+- `HSTS`: set to a `Strict-Transport-Security` value, e.g. `max-age=31536000`, to send HSTS on HTTPS requests (direct or forwarded by a trusted proxy). Off by default; add `; includeSubDomains` only if every subdomain serves HTTPS
 - `BLOCK_XMLRPC`: set to `1` to refuse `xmlrpc.php` (403), a common password-guessing target. Off by default because Jetpack and the WordPress mobile apps still use it
 
 #### Wordpress
@@ -106,6 +109,10 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
 - `WORDPRESS_TABLE_PREFIX`: The WordPress database table prefix.
 - `WORDPRESS_DEBUG`: Turns on WordPress Debug.
 - `FORCE_HTTPS`: Set to `1` to tell WordPress every request is HTTPS. Usually not needed behind a load balancer that terminates TLS, since requests a trusted proxy forwards as HTTPS are detected automatically (see `TRUSTED_PROXIES`). Defaults to `0`.
+- `DISALLOW_FILE_EDIT`: set to `1` to turn off the theme and plugin code editors in wp-admin, so a stolen admin login can't be turned into running PHP through them. Recommended for production
+- `DISABLE_WP_CRON`: set to `1` to stop WordPress from running scheduled tasks on page loads, when you run them from a real scheduler instead, e.g. `wp cron event run --due-now` every few minutes
+
+`FORCE_HTTPS`, `DISALLOW_FILE_EDIT` and `DISABLE_WP_CRON` are applied before every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created. Don't also define `DISALLOW_FILE_EDIT` or `DISABLE_WP_CRON` in `WORDPRESS_CONFIG_EXTRA`.
 - `WORDPRESS_CONFIG_EXTRA`: use this for adding WP_HOME, WP_SITEURL, etc
 
 ### WP-CLI
@@ -115,6 +122,8 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
     docker exec <container> wp plugin list
 
 ### Healthcheck
+
+`/healthz` answers `ok` straight from Caddy, without PHP or the database, for load balancers and uptime checks.
 
 The image's `HEALTHCHECK` runs a tiny PHP script on an internal port (`127.0.0.1:2080`, not reachable from outside the container). The container is healthy when Caddy answers and PHP executes, independent of `SERVER_NAME` and of the database, so a database outage doesn't make orchestrators restart it.
 
@@ -140,7 +149,9 @@ When building this repository yourself, `--build-arg WITH_GHOSTSCRIPT=0` leaves 
 - **No PHP from uploads:** `.php`, `.phtml`, `.phar` and similar files under `wp-content/uploads` return 404, so a vulnerable upload form can't become remote code execution.
 - **No private files:** hidden files and folders (`.git`, `.env`, `.htaccess`, …) and backup or log files (`*.bak`, `*.sql`, `*.log`, …) return 404. `/.well-known/` is still served.
 - **Restricted image formats:** Imagick only handles GIF, JPEG, PNG, WebP, AVIF and HEIC, plus reading PDFs for thumbnails. PostScript, SVG and ImageMagick's other formats are refused, which keeps uploads away from rarely audited parsers. In the VIPS images, `VIPS_BLOCK_UNTRUSTED=1` likewise limits libvips to its well-audited loaders, so its PDF, SVG and ImageMagick loaders are off (PDF thumbnails still come from Imagick).
-- **Security headers:** `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options` are added unless WordPress already sent them.
+- **Security headers:** `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options` are added unless WordPress already sent them; the `Server` header is removed. HSTS is available via `HSTS`.
+- **No spoofed HTTPS:** `X-Forwarded-Proto` and `CloudFront-Forwarded-Proto` are only honoured from trusted proxies (`TRUSTED_PROXIES`) and dropped from other requests. WordPress's stock `wp-config.php` would otherwise believe any visitor claiming HTTPS.
+- **Bounded requests:** slow clients time out, and oversized request bodies get 413 (see `TIMEOUT_*` and `REQUEST_BODY_MAX_BYTES`).
 - **Verified downloads:** WP-CLI and the VIPS plugin are pinned to releases and checked against their published checksums.
 - **Optional XML-RPC block:** `BLOCK_XMLRPC=1` refuses `xmlrpc.php`.
 - **Pinned base images:** every base image is pinned by digest; updates come in as Dependabot pull requests that CI tests first.
@@ -166,7 +177,7 @@ It is good practice to avoid using root users in your Docker images for security
 
 ### How to use when behind load balancer or proxy?
 
-_tldr: Use a port (ie :80, :8095, etc) for SERVER_NAME env variable._
+_tldr: The default `SERVER_NAME=:80` already serves plain HTTP on port 80 for any hostname. Use another port (e.g. `:8095`) if your proxy expects one._
 
 Working in cloud environments like AWS can be tricky because your traffic is going through a load balancer or some proxy. This means your server name is not what you think your server name is. Your domain hits a proxy dns entry that then hits your application. The application doesn't know your domain. It knows the proxied name. This may seem strange, but it's actually a well established strong architecture pattern.
 

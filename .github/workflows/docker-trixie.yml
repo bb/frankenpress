@@ -10,6 +10,7 @@ on:
       - 'php.ini'
       - 'imagemagick-policy.xml'
       - 'frankenpress-entrypoint.sh'
+      - 'frankenpress-prepend.php'
       - 'wp-cli.yml'
       - 'tests/**'
       - '.github/workflows/docker-trixie.yml'
@@ -20,6 +21,7 @@ on:
       - 'php.ini'
       - 'imagemagick-policy.xml'
       - 'frankenpress-entrypoint.sh'
+      - 'frankenpress-prepend.php'
       - 'wp-cli.yml'
       - 'tests/**'
       - '.github/workflows/docker-trixie.yml'
@@ -53,6 +55,12 @@ jobs:
         # Split platforms to use native runners (amd64 on x64, arm64 on ARM); PRs build amd64 only
         platform: ${{ github.event_name == 'pull_request' && fromJSON('["linux/amd64"]') || fromJSON('["linux/amd64", "linux/arm64"]') }}
       fail-fast: false
+    # Job-level permissions replace the workflow's, so repeat those and add
+    # security-events for uploading Trivy results to code scanning
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
     env:
       # e.g. php-8.5-trixie-amd64 or php-8.5-vips-ffi-trixie-arm64
       ARCH_TAG: php-${{ matrix.php-version }}${{ matrix.variant != 'standard' && format('-{0}', matrix.variant) || '' }}-trixie-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
@@ -164,6 +172,8 @@ jobs:
           set -euo pipefail
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" "$TRIVY" \
             image --quiet --scanners vuln --severity HIGH,CRITICAL --format json --output /out/trivy.json "$IMAGE"
+          docker run --rm -v "$PWD:/out" "$TRIVY" \
+            convert --quiet --format sarif --output /out/trivy.sarif /out/trivy.json
           summary=$(jq -r '[.Results[]?.Vulnerabilities[]?] as $v
             | "critical=\($v | map(select(.Severity == "CRITICAL")) | length)"
             + " high=\($v | map(select(.Severity == "HIGH")) | length)"
@@ -179,6 +189,17 @@ jobs:
               | sort_by(if .Severity == "CRITICAL" then 0 else 1 end, .PkgName)[]
               | "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "") |"' trivy.json
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Track the same findings in the repository's Security tab (code
+      # scanning), one category per variant. Report-only like the scan; PRs
+      # from forks can't upload, so failures don't fail the build.
+      - name: Upload Trivy results to code scanning
+        if: matrix.platform == 'linux/amd64'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-${{ matrix.variant }}
 
   create-manifests:
     if: github.event_name != 'pull_request'

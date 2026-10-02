@@ -5,14 +5,14 @@
 #
 # Starts MariaDB and the image, installs WordPress, then checks runtime health,
 # the hardening rules, proxy handling and image processing. Needs Docker and
-# curl; exits non-zero if any check fails.
+# curl, jq and python3; exits non-zero if any check fails.
 set -u
 IMG=$1; VARIANT=$2; NET=fpt-$$; WP=fpwp-$$; DB=fpdb-$$; PORT=${PORT:-18081}
 fail=0
 check() { # check <description> <expected> <actual>
   if [ "$2" = "$3" ]; then printf "  ok    %-52s %s\n" "$1" "$3"; else printf "  FAIL  %-52s expected=%s got=%s\n" "$1" "$2" "$3"; fail=1; fi
 }
-cleanup() { docker rm -f $WP $DB >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
+cleanup() { docker rm -fv $WP $DB >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
 trap cleanup EXIT
 
 echo "=== $IMG ($VARIANT)"
@@ -45,12 +45,14 @@ docker volume rm $VOL >/dev/null
 docker network create $NET >/dev/null
 docker run -d --name $DB --network $NET -e MARIADB_ROOT_PASSWORD=r -e MARIADB_DATABASE=wp -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11 >/dev/null
 for _ in $(seq 1 40); do docker exec $DB mariadb -uwp -pwp -e 'select 1' wp >/dev/null 2>&1 && break; sleep 2; done
-docker run -d --name $WP --network $NET -p $PORT:80 -e SERVER_NAME=:80 -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
+docker run -d --name $WP --network $NET -p $PORT:80 -e DISALLOW_FILE_EDIT=1 -e HSTS=max-age=300 -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
 for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:$PORT/ && break; sleep 1; done
 docker exec $WP wp core install --url=http://localhost:$PORT --title=T --admin_user=a --admin_password=a --admin_email=a@example.com --skip-email >/dev/null 2>&1
 B=http://localhost:$PORT
 code() { curl -s -o /dev/null -w '%{http_code}' "$B$1"; }
-check "home page" 200 "$(code /)"
+check "home page (default SERVER_NAME :80)" 200 "$(code /)"
+check "public /healthz without PHP" ok "$(curl -s $B/healthz)"
+check "Server header hidden" 0 "$(curl -sI $B/ | grep -ci '^server:')"
 check "wp-login.php" 200 "$(code /wp-login.php)"
 check "wp-admin css (static)" 200 "$(code /wp-admin/css/login.min.css)"
 
@@ -84,11 +86,25 @@ check "HTTPS via X-Forwarded-Proto from trusted proxy" https "$(curl -s -H 'X-Fo
 check "HTTPS via CloudFront-Forwarded-Proto" https "$(curl -s -H 'CloudFront-Forwarded-Proto: https' $B/ssl.php)"
 check "plain HTTP stays HTTP" http "$(curl -s $B/ssl.php)"
 check "forged internal HTTPS marker ignored" http "$(curl -s -H 'X-Frankenpress-Https: on' $B/ssl.php)"
+check "forged marker with underscores ignored" http "$(curl -s -H 'X_Frankenpress_Https: on' $B/ssl.php)"
+check "headers can't forge the trust signal" http "$(curl -s -H 'Frankenpress-Https: on' -H 'Frankenpress-Trusted-Proxy: true' $B/ssl.php)"
 check "xmlrpc.php allowed by default" 405 "$(code /xmlrpc.php)"
 check "wp-cli works from any directory" yes "$(docker exec -w / $WP wp core version >/dev/null 2>&1 && echo yes || echo no)"
 check "healthcheck endpoint" ok "$(docker exec $WP curl -fsS http://127.0.0.1:2080/healthz.php 2>/dev/null)"
 for _ in $(seq 1 20); do st=$(docker inspect $WP --format '{{.State.Health.Status}}'); [ "$st" != starting ] && break; sleep 3; done
 check "docker health status" healthy "$st"
+# REST API under /wp-json/ with plain permalinks (the fresh install default)
+docker exec $WP wp rewrite structure '' >/dev/null 2>&1
+check "/wp-json/ is the REST index (plain permalinks)" yes "$(curl -s $B/wp-json/ | grep -q '"namespaces"' && echo yes || echo no)"
+check "/wp-json/wp/v2/posts?per_page=1 returns one post" 1 "$(curl -s "$B/wp-json/wp/v2/posts?per_page=1" | jq length 2>/dev/null)"
+check "POST /wp-json/ keeps method (401 unauthenticated)" 401 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d 'title=x' $B/wp-json/wp/v2/posts)"
+docker exec $WP wp rewrite structure '/%postname%/' >/dev/null 2>&1
+check "/wp-json/ with pretty permalinks" yes "$(curl -s $B/wp-json/ | grep -q '"namespaces"' && echo yes || echo no)"
+
+docker exec $WP sh -c 'echo "<?php require __DIR__ . \"/wp-load.php\"; echo (defined(\"DISALLOW_FILE_EDIT\") && DISALLOW_FILE_EDIT) ? \"on\" : \"off\";" > dfe.php'
+check "DISALLOW_FILE_EDIT=1 applied" on "$(curl -s $B/dfe.php)"
+check "HSTS not sent over plain HTTP" 0 "$(curl -sI $B/ | grep -ci '^strict-transport-security:')"
+check "HSTS sent when proxy forwards HTTPS" "max-age=300" "$(curl -sI -H 'X-Forwarded-Proto: https' $B/ | grep -i '^strict-transport-security:' | cut -d' ' -f2- | tr -d '\r')"
 check "brotli" br "$(curl -s -H 'Accept-Encoding: br' -o /dev/null -w '%header{content-encoding}' $B/)"
 
 # --- image processing through WordPress
@@ -121,6 +137,32 @@ check "PDF upload gets a thumbnail" yes "$pdfthumb"
 if [ "$VARIANT" = vips-ffi ]; then
   check "VIPS editor in use" 'NotGlossy\VipsImageEditorFFI\Image_Editor_Vips_FFI' "$(docker exec $WP wp eval 'echo get_class(wp_get_image_editor("/tmp/t.jpg"));' 2>/dev/null)"
 fi
+
+# Request size cap and header timeout, on small limits so the test is quick
+LIM=fplim-$$
+docker run -d --name $LIM -p $((PORT + 1)):80 -e REQUEST_BODY_MAX_BYTES=1024 -e TIMEOUT_READ_HEADER=2s -e TRUSTED_PROXIES=198.51.100.0/24 --entrypoint sh "$IMG" -c 'echo "<?php echo \$_SERVER[\"HTTP_X_FORWARDED_PROTO\"] ?? \"none\", \" \", (empty(\$_SERVER[\"HTTPS\"]) ? \"off\" : \$_SERVER[\"HTTPS\"]);" > /var/www/html/proto.php && exec frankenphp run --config /etc/caddy/Caddyfile' >/dev/null
+for _ in $(seq 1 30); do curl -s -o /dev/null "http://localhost:$((PORT + 1))/healthz" && break; sleep 1; done
+check "body over REQUEST_BODY_MAX_BYTES refused (413)" 413 "$(head -c 4096 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/index.php")"
+check "body under the limit still accepted" 200 "$(head -c 512 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz")"
+slow=$(python3 - "$((PORT + 1))" <<'PY'
+import socket, sys, time
+s = socket.create_connection(("localhost", int(sys.argv[1])))
+s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n")  # never finish the headers
+start = time.time()
+s.settimeout(15)
+try:
+    while s.recv(1024):
+        pass
+except Exception:
+    pass
+print("closed" if time.time() - start < 10 else "open")
+PY
+)
+check "stalled request headers time out (TIMEOUT_READ_HEADER)" closed "$slow"
+check "X-Forwarded-Proto from untrusted client dropped" "none off" "$(curl -s -H 'X-Forwarded-Proto: https' "http://localhost:$((PORT + 1))/proto.php")"
+check "X_Forwarded_Proto (underscore) from untrusted client dropped" "none off" "$(curl -s -H 'X_Forwarded_Proto: https' "http://localhost:$((PORT + 1))/proto.php")"
+check "X-Forwarded_Proto (mixed) from untrusted client dropped" "none off" "$(curl -s -H 'X-Forwarded_Proto: https' "http://localhost:$((PORT + 1))/proto.php")"
+docker rm -fv $LIM >/dev/null
 
 errs=$(docker logs $WP 2>&1 | grep -E '"level":"error"|PHP (Fatal|Warning|Parse)' | grep -v 'install root certificate' | head -3)
 check "no errors in container log" "" "$errs"

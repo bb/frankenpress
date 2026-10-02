@@ -3,13 +3,25 @@
 	# localhost and IP addresses automatically use Caddy's local CA.
 	auto_https disable_redirects # This is required to avoid redirect loops when using a reverse proxy and cloud load balancers.
 
-	# Behind a load balancer or reverse proxy, take the client IP from
-	# X-Forwarded-For, but only when the request comes from a trusted proxy
-	# (default: private network ranges). Set TRUSTED_PROXIES to your proxies'
-	# CIDRs to narrow this down, e.g. "10.0.1.0/24".
 	servers {
+		# Behind a load balancer or reverse proxy, take the client IP from
+		# X-Forwarded-For, but only when the request comes from a trusted proxy
+		# (default: private network ranges). Set TRUSTED_PROXIES to your proxies'
+		# CIDRs to narrow this down, e.g. "10.0.1.0/24".
 		trusted_proxies static {$TRUSTED_PROXIES:private_ranges}
 		client_ip_headers X-Forwarded-For
+
+		# Bound how long a client may take, so slow or stalled connections
+		# can't hold PHP threads. Caddy's defaults are no limit for the body
+		# and the response. read_body allows large uploads over slow links;
+		# write covers PHP's run time (imports and updates may take minutes)
+		# plus sending the response.
+		timeouts {
+			read_header {$TIMEOUT_READ_HEADER:10s}
+			read_body {$TIMEOUT_READ_BODY:10m}
+			write {$TIMEOUT_WRITE:10m}
+			idle {$TIMEOUT_IDLE:5m}
+		}
 	}
 
 	{$CADDY_GLOBAL_OPTIONS}
@@ -35,10 +47,24 @@ http://127.0.0.1:2080 {
 	php_server
 }
 
-## Need to set all hosts with port for the cloud.
-# You may not have the hostname being called due to dynamic IPs and load balancers.
-# Allowing all hosts on port 80 for health checks, local dev & cases where the hostname is unknown.
-{$SERVER_NAME:localhost} {
+# Default ":80": plain HTTP on port 80 for any hostname, which is what a
+# container behind a load balancer or reverse proxy needs, and what
+# `docker run -p 80:80` expects. For HTTPS with a public certificate, set
+# SERVER_NAME to your hostname(s), e.g. "example.com" or "example.com, :80".
+{$SERVER_NAME::80} {
+	# Liveness for load balancers and uptime checks: answered by Caddy
+	# without PHP or the database, so maintenance or a database outage
+	# doesn't take the container out of rotation.
+	respond /healthz "ok" 200
+
+	# Refuse requests that announce a body above the upload limit (413) before
+	# PHP starts on them. Default: 536870912 bytes = php.ini's 512M. Caddy's
+	# request_body max_size is deliberately not used: with FrankenPHP it
+	# truncates the body silently and PHP processes the cut-off data. Chunked
+	# requests without Content-Length are still capped by PHP's post_max_size.
+	@too_large `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > {$REQUEST_BODY_MAX_BYTES:536870912}`
+	respond @too_large "Request body too large" 413
+
 	# Never run PHP from writable upload folders, including the
 	# /evil.php/extra path-info trick. Turns an upload bug into a 404
 	# instead of remote code execution.
@@ -61,17 +87,28 @@ http://127.0.0.1:2080 {
 	}
 	respond @xmlrpc 403
 
+	# /wp-json/... works on every site: without pretty permalinks WordPress
+	# only answers the REST API via ?rest_route=, so /wp-json/ would return
+	# the home page. Rewriting to the query form works with any permalink
+	# setting; method, body and existing query parameters are kept.
+	@wpjson_root path /wp-json /wp-json/
+	rewrite @wpjson_root /index.php?rest_route=/&{query}
+	@wpjson_child path_regexp wpjson ^/wp-json(/.+)$
+	rewrite @wpjson_child /index.php?rest_route={re.wpjson.1}&{query}
+
 	# Behind a TLS-terminating proxy, tell PHP the request was HTTPS when a
 	# trusted proxy (TRUSTED_PROXIES) says so via X-Forwarded-Proto or
-	# CloudFront-Forwarded-Proto. wp-config.php turns the marker header into
-	# $_SERVER['HTTPS']; any client-supplied copy of it is stripped first.
-	# The route keeps the two directives in this order (Caddy would otherwise
-	# run the unconditional one last).
+	# CloudFront-Forwarded-Proto. The result reaches PHP as server variables
+	# (FRANKENPRESS_HTTPS, FRANKENPRESS_TRUSTED_PROXY, set in php_server
+	# below), not as headers: client headers always arrive as HTTP_*, so no
+	# header spelling can forge them. frankenpress-prepend.php then sets
+	# $_SERVER['HTTPS'], and removes HTTP_X_FORWARDED_PROTO and
+	# HTTP_CLOUDFRONT_FORWARDED_PROTO from requests that didn't come from a
+	# trusted proxy, because WordPress's stock wp-config.php would otherwise
+	# believe any visitor claiming HTTPS. Working on PHP's normalized names
+	# covers every "-"/"_" spelling of those headers.
 	@forwarded_https `{http.vars.trusted_proxy} == true && ({header.X-Forwarded-Proto}.lowerAscii().startsWith("https") || {header.CloudFront-Forwarded-Proto}.lowerAscii().startsWith("https"))`
-	route {
-		request_header -X-Frankenpress-Https
-		request_header @forwarded_https X-Frankenpress-Https on
-	}
+	vars @forwarded_https frankenpress_https on
 
 	@static {
 		file
@@ -79,12 +116,20 @@ http://127.0.0.1:2080 {
 	}
 	header @static Cache-Control "public, max-age=2592000"
 
-	# "?" only sets a header when WordPress hasn't sent one itself
+	# "?" only sets a header when WordPress hasn't sent one itself.
+	# The Server header ("FrankenPHP Caddy") is dropped to avoid fingerprinting.
 	header {
 		?X-Content-Type-Options nosniff
 		?Referrer-Policy strict-origin-when-cross-origin
 		?X-Frame-Options SAMEORIGIN
+		-Server
 	}
+
+	# Optional HSTS: set HSTS to the header value, e.g. "max-age=31536000"
+	# (add "; includeSubDomains" only if every subdomain serves HTTPS).
+	# Only sent on HTTPS requests, direct or forwarded by a trusted proxy.
+	@hsts `"{$HSTS:}" != "" && ({http.request.scheme} == "https" || ({http.vars.trusted_proxy} == true && ({header.X-Forwarded-Proto}.lowerAscii().startsWith("https") || {header.CloudFront-Forwarded-Proto}.lowerAscii().startsWith("https"))))`
+	header @hsts Strict-Transport-Security "{$HSTS}"
 
 	root * /var/www/html/
 	encode br zstd gzip
@@ -96,5 +141,8 @@ http://127.0.0.1:2080 {
 		# client IP resolved via trusted_proxies so WordPress, login limiters and
 		# security plugins see real visitors instead of the load balancer.
 		env REMOTE_ADDR {client_ip}
+		# Trust and HTTPS decisions for frankenpress-prepend.php (see above)
+		env FRANKENPRESS_TRUSTED_PROXY {http.vars.trusted_proxy}
+		env FRANKENPRESS_HTTPS {http.vars.frankenpress_https}
 	}
 }
