@@ -1,0 +1,3 @@
+# Default WordPress path for WP-CLI, so `wp` works from any directory,
+# e.g. `docker exec -w / <container> wp core version`.
+path: /var/www/html

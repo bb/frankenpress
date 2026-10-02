@@ -243,9 +243,21 @@ RUN sed -i \
 # - php.ini: WordPress-specific PHP settings (upload size, execution time, etc.)
 # - Caddyfile: Caddy web server configuration (routing, headers, compression)
 # - imagemagick-policy.xml: limits Imagick to the formats WordPress needs
+# - wp-cli.yml: points WP-CLI at the site, so `wp` works from any directory
+# - healthz.php: served only on 127.0.0.1:2080 for the HEALTHCHECK below
 COPY php.ini $PHP_INI_DIR/conf.d/wp.ini
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY imagemagick-policy.xml /etc/ImageMagick-7/policy.xml
+COPY wp-cli.yml /usr/local/etc/wp-cli.yml
+ENV WP_CLI_CONFIG_PATH=/usr/local/etc/wp-cli.yml
+RUN mkdir -p /usr/local/share/frankenpress/health \
+    && echo '<?php echo "ok";' > /usr/local/share/frankenpress/health/healthz.php
+
+# Healthy when Caddy answers and PHP executes. Deliberately independent of the
+# database, so a database outage doesn't make orchestrators restart the
+# container. Replaces the base image's check of Caddy's admin API.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:2080/healthz.php || exit 1
 
 # -----------------------------------------------------------------------------
 # Container Runtime Configuration

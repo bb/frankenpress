@@ -9,6 +9,8 @@ on:
       - 'Caddyfile'
       - 'php.ini'
       - 'imagemagick-policy.xml'
+      - 'wp-cli.yml'
+      - 'tests/**'
       - '.github/workflows/docker-trixie.yml'
   pull_request:
     paths:
@@ -16,6 +18,8 @@ on:
       - 'Caddyfile'
       - 'php.ini'
       - 'imagemagick-policy.xml'
+      - 'wp-cli.yml'
+      - 'tests/**'
       - '.github/workflows/docker-trixie.yml'
   schedule:
     - cron: "0 1 * * 0" # Every Sunday at 1 AM UTC
@@ -140,6 +144,12 @@ jobs:
             run printenv VIPS_BLOCK_UNTRUSTED | grep -qx 1
           fi
 
+      # Full run against WordPress + MariaDB: hardening rules, proxy handling,
+      # healthcheck and image processing (see tests/integration.sh)
+      - name: Integration test
+        if: github.event_name == 'pull_request'
+        run: tests/integration.sh "${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}" "${{ matrix.variant }}"
+
       # Report-only: lists HIGH/CRITICAL vulnerabilities in the job summary and
       # never fails the build. Trivy runs from its official image pinned by
       # digest rather than via aquasecurity/trivy-action, whose tags were
@@ -198,12 +208,21 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Besides the floating tags, publish version-specific ones so deployments
+      # can pin a build and roll back, e.g. php-8.5-trixie-wp7.1.2 (follows
+      # rebuilds of that WordPress version) and php-8.5-trixie-wp7.1.2-20261004
+      # (one specific weekly build).
       - name: Create multi-arch manifests
         run: |
           set -euo pipefail
+          tag="php-${{ matrix.php-version }}-$SUFFIX"
+          wp=$(docker run --rm --entrypoint php "${{ env.DOCKERHUB_IMAGE }}:$tag-amd64" \
+            -r 'include "/usr/src/wordpress/wp-includes/version.php"; echo $wp_version;')
+          [[ "$wp" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::Unexpected WordPress version '$wp'"; exit 1; }
+          build_date=$(date -u +%Y%m%d)
+          echo "::notice title=Tags ($tag)::WordPress $wp, build $build_date"
           for repo in "${{ env.DOCKERHUB_IMAGE }}" "ghcr.io/${{ github.repository_owner }}/frankenpress"; do
-            tag="php-${{ matrix.php-version }}-$SUFFIX"
-            tags=(-t "$repo:$tag")
+            tags=(-t "$repo:$tag" -t "$repo:$tag-wp$wp" -t "$repo:$tag-wp$wp-$build_date")
             if [ "${{ matrix.php-version }}" = "$LATEST_PHP" ]; then
               # standard: trixie + latest; vips-ffi: vips-ffi-trixie + vips-ffi
               tags+=(-t "$repo:$SUFFIX" -t "$repo:${{ matrix.variant == 'standard' && 'latest' || matrix.variant }}")
