@@ -134,6 +134,40 @@ http://127.0.0.1:2080 {
 	root * /var/www/html/
 	encode br zstd gzip
 
+	# Optional (SUPERCACHE=1): serve the static pages of the WP Super Cache
+	# plugin straight from disk, without PHP, the way its mod_rewrite rules
+	# do on Apache. Same conditions as those rules: GET/HEAD, no query
+	# string, no login/comment/password cookie, and a cached file for this
+	# host and path. Only paths ending in "/" (WordPress's default
+	# permalinks), so other URLs still get WordPress's redirects. Anything
+	# else, or a missing file, falls through to PHP as before.
+	# HTTPS pages are cached as index-https.html. Checked here directly, not
+	# via frankenpress_https: Caddy may run this vars before that one.
+	@supercache_https `{http.request.scheme} == "https" || ({http.vars.trusted_proxy} == true && ({header.X-Forwarded-Proto}.lowerAscii().startsWith("https") || {header.CloudFront-Forwarded-Proto}.lowerAscii().startsWith("https"))) || "{$FORCE_HTTPS:0}".lowerAscii() in ["1", "true", "yes", "on"]`
+	vars @supercache_https frankenpress_supercache_https -https
+	@supercache {
+		expression `"{$SUPERCACHE:0}" == "1" && {query} == ""`
+		method GET HEAD
+		path */
+		not path_regexp //
+		not header_regexp Cookie (comment_author_|wordpress_logged_in|wp-postpass_)
+		not header_regexp X-Wap-Profile (?i)^[a-z0-9"]+
+		not header_regexp Profile (?i)^[a-z0-9"]+
+		file /wp-content/cache/supercache/{host}{path}index{http.vars.frankenpress_supercache_https}.html
+	}
+	handle @supercache {
+		rewrite * {http.matchers.file.relative}
+		# The plugin's own headers for these files (compression adds
+		# "Vary: Accept-Encoding" itself)
+		header Vary Cookie
+		header Cache-Control "max-age=3, must-revalidate"
+		header X-FrankenPress-Cache HIT
+		# index.html.gz, when the plugin's compression is on
+		file_server {
+			precompressed gzip
+		}
+	}
+
 	{$CADDY_SERVER_EXTRA_DIRECTIVES}
 
 	php_server {

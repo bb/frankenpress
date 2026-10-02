@@ -31,6 +31,8 @@ services:
       CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
       # Theme and plugin code editors in wp-admin: off unless set to 0
       DISALLOW_FILE_EDIT: ${DISALLOW_FILE_EDIT:-}
+      # 1: serve WP Super Cache's pages without PHP (see "Page Cache")
+      SUPERCACHE: ${SUPERCACHE:-}
       # PHP threads: start with 4, add more under load, up to 8. Without
       # this, the image starts two per available CPU, at most 4: only 2
       # with "cpus: 1", and none added under load.
