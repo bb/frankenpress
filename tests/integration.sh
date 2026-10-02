@@ -86,6 +86,7 @@ check "HTTPS via X-Forwarded-Proto from trusted proxy" https "$(curl -s -H 'X-Fo
 check "HTTPS via CloudFront-Forwarded-Proto" https "$(curl -s -H 'CloudFront-Forwarded-Proto: https' $B/ssl.php)"
 check "plain HTTP stays HTTP" http "$(curl -s $B/ssl.php)"
 check "forged internal HTTPS marker ignored" http "$(curl -s -H 'X-Frankenpress-Https: on' $B/ssl.php)"
+check "forged marker with underscores ignored" http "$(curl -s -H 'X_Frankenpress_Https: on' $B/ssl.php)"
 check "xmlrpc.php allowed by default" 405 "$(code /xmlrpc.php)"
 check "wp-cli works from any directory" yes "$(docker exec -w / $WP wp core version >/dev/null 2>&1 && echo yes || echo no)"
 check "healthcheck endpoint" ok "$(docker exec $WP curl -fsS http://127.0.0.1:2080/healthz.php 2>/dev/null)"
@@ -158,6 +159,7 @@ PY
 )
 check "stalled request headers time out (TIMEOUT_READ_HEADER)" closed "$slow"
 check "X-Forwarded-Proto from untrusted client dropped" "none off" "$(curl -s -H 'X-Forwarded-Proto: https' "http://localhost:$((PORT + 1))/proto.php")"
+check "X_Forwarded_Proto (underscore) from untrusted client dropped" "none off" "$(curl -s -H 'X_Forwarded_Proto: https' "http://localhost:$((PORT + 1))/proto.php")"
 docker rm -fv $LIM >/dev/null
 
 errs=$(docker logs $WP 2>&1 | grep -E '"level":"error"|PHP (Fatal|Warning|Parse)' | grep -v 'install root certificate' | head -3)

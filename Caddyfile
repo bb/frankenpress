@@ -108,10 +108,18 @@ http://127.0.0.1:2080 {
 	# from a trusted proxy; otherwise any visitor could claim HTTPS.
 	@forwarded_https `{http.vars.trusted_proxy} == true && ({header.X-Forwarded-Proto}.lowerAscii().startsWith("https") || {header.CloudFront-Forwarded-Proto}.lowerAscii().startsWith("https"))`
 	@untrusted_client `{http.vars.trusted_proxy} != true`
+	#
+	# PHP sees "-" and "_" alike in header names (X_Forwarded_Proto also
+	# becomes HTTP_X_FORWARDED_PROTO). The server currently drops header names
+	# with underscores before they get here; the underscore removals below
+	# keep this safe even if that ever changes.
 	route {
 		request_header -X-Frankenpress-Https
+		request_header -X_Frankenpress_Https
 		request_header @untrusted_client -X-Forwarded-Proto
+		request_header @untrusted_client -X_Forwarded_Proto
 		request_header @untrusted_client -CloudFront-Forwarded-Proto
+		request_header @untrusted_client -CloudFront_Forwarded_Proto
 		request_header @forwarded_https X-Frankenpress-Https on
 	}
 
