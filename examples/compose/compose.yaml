@@ -32,8 +32,8 @@ services:
       # Theme and plugin code editors in wp-admin: off unless set to 0
       DISALLOW_FILE_EDIT: ${DISALLOW_FILE_EDIT:-}
       # PHP threads: start with 4, add more under load, up to 8. Without
-      # this, FrankenPHP starts two per CPU it sees: only 2 with "cpus: 1",
-      # 64 on an unlimited 32-thread host.
+      # this, the image starts two per available CPU, at most 4: only 2
+      # with "cpus: 1", and none added under load.
       FRANKENPHP_CONFIG: |
         num_threads 4
         max_threads 8

@@ -13,5 +13,3 @@ Open items from the image review and the comparison with
 
 - [ ] **Confirm the first Dependabot base-image update.** Dependabot already parses the digest-pinned `FROM` lines (wordpress, dunglas/frankenphp, debian) and reports them current. When the first update PR arrives, check that CI runs on it, that it merges automatically (`dependabot-automerge.yml`, not for major versions), and that the image build on main starts afterwards and publishes.
 - [ ] **Confirm the first keepalive run** (scheduled Sunday 2026-10-04, 01:00 UTC). Check that the `keepalive` job succeeds and the workflow stays `active`.
-
-- [ ] **Decide on a default `num_threads` for containers without a CPU limit.** FrankenPHP starts 2 × the CPUs it sees, e.g. 64 threads on a 32-thread host, each allowed `memory_limit` (256M). A fixed image default (e.g. 4, `max_threads` 8, as in the compose example) would bound memory out of the box, but must not override `FRANKENPHP_CONFIG` and needs a way back to FrankenPHP's own default.
