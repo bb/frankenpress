@@ -141,6 +141,8 @@ ENV PHP_INI_DIR=/usr/local/etc/php \
 # -----------------------------------------------------------------------------
 # - ca-certificates: SSL/TLS certificate validation
 # - curl: HTTP client for WP-CLI and the healthcheck
+# - msmtp: SMTP client behind /usr/sbin/sendmail, so PHP's mail() and
+#   WordPress can send through a relay configured with MSMTP_* variables
 # - xz-utils: unpacks the PHP source when install-php-extensions is used in
 #   images built on top of this one
 # - ghostscript: lets Imagick render thumbnails of uploaded PDFs. Build with
@@ -161,6 +163,7 @@ RUN --mount=type=bind,from=php-build,source=/runtime-packages.txt,target=/mnt/ru
         libheif-plugin-aomenc \
         libheif-plugin-dav1d \
         libheif-plugin-libde265 \
+        msmtp \
         xz-utils \
         $( [ "$WITH_GHOSTSCRIPT" = 1 ] && echo ghostscript ) \
         $(cat /mnt/runtime-packages.txt) \
@@ -281,6 +284,9 @@ RUN if id "${USER_NAME}" >/dev/null 2>&1; then \
 COPY --from=wp --chown=${USER_NAME}:${USER_NAME} /usr/src/wordpress /usr/src/wordpress
 COPY --from=wp --chown=${USER_NAME}:${USER_NAME} /usr/local/bin/docker-entrypoint.sh /usr/local/bin/
 COPY --chmod=755 frankenpress-entrypoint.sh /usr/local/bin/frankenpress-entrypoint.sh
+# sendmail -> msmtp, configured from MSMTP_* at send time (PHP's default
+# sendmail_path is "/usr/sbin/sendmail -t -i")
+COPY --chmod=755 frankenpress-sendmail.sh /usr/sbin/sendmail
 
 # -----------------------------------------------------------------------------
 # WordPress and Entrypoint Customization

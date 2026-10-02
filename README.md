@@ -127,6 +127,52 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
 
 The image's `HEALTHCHECK` runs a tiny PHP script on an internal port (`127.0.0.1:2080`, not reachable from outside the container). The container is healthy when Caddy answers and PHP executes, independent of `SERVER_NAME` and of the database, so a database outage doesn't make orchestrators restart it.
 
+## Sending Email
+
+The image ships [msmtp](https://marlam.de/msmtp/) as `/usr/sbin/sendmail`, which PHP's `mail()` and so `wp_mail()` use. Point it at an SMTP relay with `MSMTP_*` variables. They're read each time a message is sent, so they work for existing sites without touching `wp-config.php`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MSMTP` | `on` | `off` disables mail |
+| `MSMTP_HOST` | – | SMTP relay. Without it, mail isn't sent |
+| `MSMTP_PORT` | `587` | Relay port |
+| `MSMTP_USER` | – | Login; turns on authentication |
+| `MSMTP_PASSWORD` | – | Password for `MSMTP_USER` |
+| `MSMTP_FROM` | the message's `From:` | Envelope sender |
+| `MSMTP_TLS` | `on` | `off` for relays without TLS |
+| `MSMTP_STARTTLS` | `on`, `off` on port 465 | `off` for implicit TLS (port 465) |
+| `MSMTP_AUTH` | `on` with `MSMTP_USER`, else `off` | Or a method, e.g. `login` |
+| `MSMTP_TLS_CERTCHECK` | `on` | `off` accepts self-signed certificates |
+| `MSMTP_SET_FROM_HEADER` | `auto` | `on` replaces the `From:` header with `MSMTP_FROM`, for relays that reject other senders |
+
+Every variable also has a `_FILE` variant, e.g. `MSMTP_PASSWORD_FILE=/run/secrets/smtp_password`, like the official image's `WORDPRESS_*_FILE`. Setting both is an error. msmtp reads the password from the environment or the file itself, so it never appears on a command line or in a file the image writes.
+
+```yaml
+services:
+  wordpress:
+    environment:
+      MSMTP_HOST: smtp.example.com
+      MSMTP_USER: wordpress@example.com
+      MSMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      MSMTP_FROM: wordpress@example.com
+    secrets:
+      - smtp_password
+
+secrets:
+  smtp_password:
+    file: ./smtp_password.txt
+```
+
+Compose mounts a file secret with the host file's owner and permissions (it ignores `uid`, `gid` and `mode` for file secrets), and the container runs as `www-data` (uid 33). On Linux, make the file readable for it, e.g. `sudo chown 33 smtp_password.txt && sudo chmod 400 smtp_password.txt`.
+
+Test it with:
+
+    docker compose exec wordpress wp eval 'var_dump(wp_mail("you@example.com", "test", "test"));'
+
+At startup the container logs where mail goes, or `mail is NOT configured`. Each delivery is logged as one `MSMTP` line with sender, recipients and SMTP status, never the message body or password. A failed mail logs the reason, and `wp_mail()` returns `false`.
+
+SMTP or API plugins (FluentSMTP, WP Mail SMTP, …) send on their own and take precedence over these settings when installed.
+
 ## Extending the Image
 
 The published image has no compiler. To add a PHP extension in your own image, install the build tools for that step, as listed in `$PHPIZE_DEPS`, then remove them again:
