@@ -1,0 +1,58 @@
+name: Dependabot auto-merge
+
+# Merges Dependabot pull requests once the required checks on main pass
+# (branch protection), except major version updates, which wait for a
+# person. Base-image digest, patch and minor updates (PHP, FrankenPHP,
+# WordPress, Debian) and GitHub Actions bumps then ship without anyone
+# merging by hand.
+#
+# A merge made with GITHUB_TOKEN doesn't trigger other workflows, so this
+# job waits for the merge and then starts the image build on main itself;
+# otherwise the update would only be published by the weekly schedule.
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'bb/frankenpress'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Read Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Enable auto-merge
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --merge "$PR_URL"
+
+      - name: Publish images after the merge
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          # Wait for auto-merge (the required checks take a few minutes)
+          for _ in $(seq 1 100); do
+            state=$(gh pr view "$PR_URL" --json state --jq .state)
+            case "$state" in
+              MERGED) break ;;
+              CLOSED) echo "Pull request was closed without merging"; exit 0 ;;
+            esac
+            sleep 30
+          done
+          if [ "$state" != MERGED ]; then
+            echo "::warning::Not merged within 50 minutes; the weekly build will publish it"
+            exit 0
+          fi
+          gh workflow run docker-trixie.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "Started the image build on main"

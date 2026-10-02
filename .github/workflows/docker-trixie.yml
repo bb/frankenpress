@@ -15,18 +15,11 @@ on:
       - 'wp-cli.yml'
       - 'tests/**'
       - '.github/workflows/docker-trixie.yml'
+  # Every pull request builds and tests, without a paths filter: main
+  # requires these checks, and a PR that never reports them (e.g. one that
+  # only touches the README) could never be merged. Pushes to main keep the
+  # filter, so documentation changes don't republish images.
   pull_request:
-    paths:
-      - 'Dockerfile'
-      - 'Caddyfile'
-      - 'php.ini'
-      - 'imagemagick-policy.xml'
-      - 'frankenpress-entrypoint.sh'
-      - 'frankenpress-prepend.php'
-      - 'frankenpress-sendmail.sh'
-      - 'wp-cli.yml'
-      - 'tests/**'
-      - '.github/workflows/docker-trixie.yml'
   schedule:
     - cron: "0 1 * * 0" # Every Sunday at 1 AM UTC
   workflow_dispatch:
