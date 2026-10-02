@@ -141,6 +141,13 @@ ENV PHP_INI_DIR=/usr/local/etc/php \
 # -----------------------------------------------------------------------------
 # - ca-certificates: SSL/TLS certificate validation
 # - curl: HTTP client for WP-CLI and the healthcheck
+# - mariadb-client-core, plus mariadb-dump and mariadb-import: the MariaDB
+#   client for `wp db` (cli, query, import, export) and for database dumps.
+#   The two tools are copied out of mariadb-client, whose other tools need
+#   Perl (~120 MB); libpcre2-posix3 is the one library they need on top.
+#   They come from the same source package and version as
+#   mariadb-client-core (the build checks it), so its security updates and
+#   the CVEs Trivy reports for it cover them too.
 # - msmtp: SMTP client behind /usr/sbin/sendmail, so PHP's mail() and
 #   WordPress can send through a relay configured with MSMTP_* variables
 # - xz-utils: unpacks the PHP source when install-php-extensions is used in
@@ -163,10 +170,18 @@ RUN --mount=type=bind,from=php-build,source=/runtime-packages.txt,target=/mnt/ru
         libheif-plugin-aomenc \
         libheif-plugin-dav1d \
         libheif-plugin-libde265 \
+        libpcre2-posix3 \
+        mariadb-client-core \
         msmtp \
         xz-utils \
         $( [ "$WITH_GHOSTSCRIPT" = 1 ] && echo ghostscript ) \
         $(cat /mnt/runtime-packages.txt) \
+    && cd /tmp && apt-get download mariadb-client \
+    && [ "$(dpkg-deb -f mariadb-client_*.deb Version)" = "$(dpkg-query -W -f '${Version}' mariadb-client-core)" ] \
+    && dpkg-deb --fsys-tarfile mariadb-client_*.deb \
+        | tar -x -C / ./usr/bin/mariadb-dump ./usr/bin/mysqldump ./usr/bin/mariadb-import \
+    && ! ldd /usr/bin/mariadb-dump /usr/bin/mariadb-import | grep 'not found' \
+    && cd / \
     && rm -rf /var/lib/apt/lists/* \
         /tmp/* \
         /var/tmp/* \
@@ -287,6 +302,12 @@ COPY --chmod=755 frankenpress-entrypoint.sh /usr/local/bin/frankenpress-entrypoi
 # sendmail -> msmtp, configured from MSMTP_* at send time (PHP's default
 # sendmail_path is "/usr/sbin/sendmail -t -i")
 COPY --chmod=755 frankenpress-sendmail.sh /usr/sbin/sendmail
+# MariaDB client tools without TLS certificate verification, as WordPress
+# connects, so `wp db` works with MySQL and MariaDB before 11.4 (see the script)
+COPY --chmod=755 frankenpress-mariadb.sh /usr/local/share/frankenpress/mariadb.sh
+RUN for t in mariadb mysql mariadb-dump mysqldump mariadb-check mariadb-import; do \
+        ln -s /usr/local/share/frankenpress/mariadb.sh /usr/local/bin/$t; \
+    done
 
 # -----------------------------------------------------------------------------
 # WordPress and Entrypoint Customization

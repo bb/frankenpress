@@ -45,7 +45,7 @@ The same pattern applies to the VIPS images, e.g. `php-8.5-vips-ffi-trixie-wp7.1
 
 All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) for maximum performance and speed. This eliminates QEMU emulation overhead, resulting in significantly faster build times.
 
-The PHP extensions are compiled in a separate build stage on the official [FrankenPHP image](https://hub.docker.com/r/dunglas/frankenphp). The published image is Debian slim plus PHP, FrankenPHP and only the libraries they link against, with no compiler toolchain. That puts the standard image at about 585 MB and the VIPS image at about 650 MB.
+The PHP extensions are compiled in a separate build stage on the official [FrankenPHP image](https://hub.docker.com/r/dunglas/frankenphp). The published image is Debian slim plus PHP, FrankenPHP and only the libraries they link against, with no compiler toolchain. That puts the standard image at about 615 MB and the VIPS image at about 680 MB.
 
 The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by digest in the `Dockerfile`, so every build uses exactly the images recorded in git. Dependabot opens a pull request when one of them changes, and CI runs the full integration test on it before it's merged. Debian package updates in the final image still arrive with every weekly rebuild.
 
@@ -61,6 +61,7 @@ The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by dige
 - **[WordPress](https://wordpress.org/)** - Latest version from official WordPress Docker images
 - **[FrankenPHP](https://frankenphp.dev/)** - Modern PHP application server (official [dunglas/frankenphp](https://hub.docker.com/r/dunglas/frankenphp) images)
 - **[Caddy](https://caddyserver.com/)** - Fast, secure web server with automatic HTTPS
+- **MariaDB client** - `mariadb`, `mariadb-dump` and `mariadb-import` for `wp db` and database imports and exports; see [Database Import and Export](#database-import-and-export)
 - **PHP Extensions** - Optimized selection for WordPress performance
 
 There is no built-in page cache. Use a caching plugin, and Redis for the object cache, as in the [compose example](examples/compose/compose.yaml). With WP Super Cache, Caddy can serve the cached pages without PHP; see [Page Cache](#page-cache). Variables such as `CACHE_LOC`, `TTL`, `PURGE_*`, `BYPASS_*` or `CACHE_RESPONSE_CODES` from older FrankenWP examples have no effect.
@@ -129,6 +130,21 @@ The official image's entrypoint creates `wp-config.php` from these variables and
 [WP-CLI](https://wp-cli.org/) is included and points at the site by default, so it works from any directory:
 
     docker exec <container> wp plugin list
+
+### Database Import and Export
+
+The MariaDB client is included (`mariadb`, `mariadb-dump`, `mariadb-import`, also as `mysql` and `mysqldump`), so `wp db` works and uses the site's database settings:
+
+    docker compose exec wordpress wp db export - > backup.sql      # dump to the host
+    docker compose exec -T wordpress wp db import - < backup.sql   # restore from the host
+    docker compose exec wordpress wp db cli                        # interactive SQL shell
+    docker compose exec wordpress wp db query 'SHOW TABLES'
+
+`-T` keeps compose from allocating a terminal, so the dump goes through stdin unchanged; with `docker exec`, use `-i`. `wp search-replace` changes URLs in an imported database, e.g. after moving a site to a new domain.
+
+The tools connect like WordPress does: with TLS when the server offers it, but without verifying the server's certificate. MariaDB's client verifies by default since 11.4, which fails against MySQL and older MariaDB servers ("SSL is required, but the server does not support it", "self-signed certificate"). Add `--ssl-verify-server-cert` to verify anyway, e.g. against a managed database with a trusted certificate.
+
+Dumps start with a line MariaDB 11 adds (`/*M!999999\- enable the sandbox mode */`), which MySQL and older MariaDB clients refuse. To import a dump elsewhere, drop it: `sed 1d backup.sql > for-mysql.sql`.
 
 ### Custom Caddy Configuration
 

@@ -7,12 +7,12 @@
 # the hardening rules, proxy handling and image processing. Needs Docker and
 # curl, jq and python3; exits non-zero if any check fails.
 set -u
-IMG=$1; VARIANT=$2; NET=fpt-$$; WP=fpwp-$$; WP2=fpwp2-$$; WP3=fpwp3-$$; TH=fpthreads-$$; DB=fpdb-$$; MAIL=fpmail-$$; PORT=${PORT:-18081}
+IMG=$1; VARIANT=$2; NET=fpt-$$; WP=fpwp-$$; WP2=fpwp2-$$; WP3=fpwp3-$$; TH=fpthreads-$$; DB=fpdb-$$; DBOLD=fpdbold-$$; MAIL=fpmail-$$; PORT=${PORT:-18081}
 fail=0
 check() { # check <description> <expected> <actual>
   if [ "$2" = "$3" ]; then printf "  ok    %-52s %s\n" "$1" "$3"; else printf "  FAIL  %-52s expected=%s got=%s\n" "$1" "$2" "$3"; fail=1; fi
 }
-cleanup() { docker rm -fv $WP $WP2 $WP3 $TH $DB $MAIL >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
+cleanup() { docker rm -fv $WP $WP2 $WP3 $TH $DB $DBOLD $MAIL >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
 trap cleanup EXIT
 
 echo "=== $IMG ($VARIANT)"
@@ -25,6 +25,9 @@ done
 check "ImageMagick extra coders not installed" no "$(docker run --rm --entrypoint sh "$IMG" -c "dpkg -s libmagickcore-7.q16-10-extra 2>/dev/null | grep -q '^Status: install ok installed' && echo yes || echo no")"
 missing=$(docker run --rm --entrypoint sh "$IMG" -c 'for f in $(php -r "echo ini_get(\"extension_dir\");")/*.so; do ldd "$f" | grep "not found"; done' 2>&1 | wc -l | tr -d ' ')
 check "all extension libraries resolve (ldd)" 0 "$missing"
+for t in mariadb mariadb-dump mariadb-import; do
+  check "$t works" yes "$(docker run --rm --entrypoint $t "$IMG" --version 2>/dev/null | grep -q 'from 1[0-9]\.' && echo yes || echo no)"
+done
 check "wp-cli works" yes "$(docker run --rm "$IMG" wp --version 2>/dev/null | grep -q '^WP-CLI [0-9]' && echo yes || echo no)"
 check "opcache.max_accelerated_files" 20000 "$(docker run --rm "$IMG" php -r 'echo ini_get("opcache.max_accelerated_files");')"
 check "memory_limit" 256M "$(docker run --rm "$IMG" php -r 'echo ini_get("memory_limit");')"
@@ -64,6 +67,8 @@ docker network create $NET >/dev/null
 # SMTP sink with an HTTP API, to check mail delivery
 docker run -d --name $MAIL --network $NET -p $((PORT + 2)):8025 axllent/mailpit >/dev/null
 docker run -d --name $DB --network $NET -e MARIADB_ROOT_PASSWORD=r -e MARIADB_DATABASE=wp -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11 >/dev/null
+# A server without TLS (MariaDB before 11.4), for the client tools below
+docker run -d --name $DBOLD --network $NET -e MARIADB_ROOT_PASSWORD=r mariadb:10.11 >/dev/null
 for _ in $(seq 1 40); do docker exec $DB mariadb -uwp -pwp -e 'select 1' wp >/dev/null 2>&1 && break; sleep 2; done
 docker run -d --name $WP --network $NET -p $PORT:80 -e UMASK=0002 -e SUPERCACHE=1 -e HSTS=max-age=300 -e MSMTP_HOST=$MAIL -e MSMTP_PORT=1025 -e MSMTP_TLS=off -e MSMTP_FROM=noreply@site.example -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
 for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:$PORT/ && break; sleep 1; done
@@ -75,6 +80,16 @@ check "public /healthz without PHP" ok "$(curl -s $B/healthz)"
 check "Server header hidden" 0 "$(curl -sI $B/ | grep -ci '^server:')"
 check "wp-login.php" 200 "$(code /wp-login.php)"
 check "wp-admin css (static)" 200 "$(code /wp-admin/css/login.min.css)"
+
+# MariaDB client: wp db round trip, and the tools against a server without
+# TLS, which the client's default certificate verification would refuse
+check "wp db query" 1 "$(docker exec $WP wp db query 'SELECT COUNT(*) FROM wp_users' --skip-column-names 2>/dev/null)"
+docker exec $WP sh -c 'wp db export /tmp/db.sql >/dev/null 2>&1 && wp option update blogname changed >/dev/null 2>&1 && wp db import /tmp/db.sql >/dev/null 2>&1'
+check "wp db export + import restore the site" T "$(docker exec $WP wp option get blogname 2>/dev/null)"
+for _ in $(seq 1 40); do docker exec $DBOLD mariadb -uroot -pr -e 'select 1' >/dev/null 2>&1 && break; sleep 2; done
+check "mariadb to a server without TLS" 1 "$(docker exec $WP sh -c "MYSQL_PWD=r mariadb -h $DBOLD -uroot -N -e 'SELECT 1'" 2>&1)"
+check "mariadb-dump from a server without TLS" yes "$(docker exec $WP sh -c "MYSQL_PWD=r mariadb-dump -h $DBOLD -uroot mysql" 2>/dev/null | grep -q 'CREATE TABLE' && echo yes || echo no)"
+docker rm -fv $DBOLD >/dev/null
 
 docker exec $WP sh -c 'mkdir -p wp-content/uploads/2026/10 && P="<?php echo \"PHP-EXECUTED\";" && echo "$P" > wp-content/uploads/2026/10/evil.php && echo "$P" > wp-content/uploads/2026/10/evil.PHtml && echo "$P" > wp-content/uploads/2026/10/evil.phar && echo secret > wp-content/debug.log && echo x > wp-config.php.bak && echo x > dump.sql && mkdir -p .git && echo "[core]" > .git/config && echo X=1 > .env && mkdir -p .well-known && echo ok > .well-known/test.txt'
 check "uploads: evil.php blocked" 404 "$(code /wp-content/uploads/2026/10/evil.php)"
