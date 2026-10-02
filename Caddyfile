@@ -2,6 +2,16 @@
 	# Real hostnames get publicly trusted certificates (Let's Encrypt/ZeroSSL);
 	# localhost and IP addresses automatically use Caddy's local CA.
 	auto_https disable_redirects # This is required to avoid redirect loops when using a reverse proxy and cloud load balancers.
+
+	# Behind a load balancer or reverse proxy, take the client IP from
+	# X-Forwarded-For, but only when the request comes from a trusted proxy
+	# (default: private network ranges). Set TRUSTED_PROXIES to your proxies'
+	# CIDRs to narrow this down, e.g. "10.0.1.0/24".
+	servers {
+		trusted_proxies static {$TRUSTED_PROXIES:private_ranges}
+		client_ip_headers X-Forwarded-For
+	}
+
 	{$CADDY_GLOBAL_OPTIONS}
 
 	frankenphp {
@@ -15,6 +25,15 @@
 }
 
 {$CADDY_EXTRA_CONFIG}
+
+# Internal healthcheck endpoint, reachable only from inside the container.
+# It runs a tiny PHP script outside the web root, so the container is healthy
+# when PHP executes, independent of SERVER_NAME and of the database.
+http://127.0.0.1:2080 {
+	bind 127.0.0.1
+	root * /usr/local/share/frankenpress/health
+	php_server
+}
 
 ## Need to set all hosts with port for the cloud.
 # You may not have the hostname being called due to dynamic IPs and load balancers.
@@ -52,5 +71,10 @@
 
 	{$CADDY_SERVER_EXTRA_DIRECTIVES}
 
-	php_server
+	php_server {
+		# FrankenPHP passes the proxy's address to PHP by default; hand it the
+		# client IP resolved via trusted_proxies so WordPress, login limiters and
+		# security plugins see real visitors instead of the load balancer.
+		env REMOTE_ADDR {client_ip}
+	}
 }
