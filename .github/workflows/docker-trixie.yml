@@ -9,6 +9,7 @@ on:
       - 'Caddyfile'
       - 'php.ini'
       - 'imagemagick-policy.xml'
+      - 'frankenpress-entrypoint.sh'
       - 'wp-cli.yml'
       - 'tests/**'
       - '.github/workflows/docker-trixie.yml'
@@ -18,6 +19,7 @@ on:
       - 'Caddyfile'
       - 'php.ini'
       - 'imagemagick-policy.xml'
+      - 'frankenpress-entrypoint.sh'
       - 'wp-cli.yml'
       - 'tests/**'
       - '.github/workflows/docker-trixie.yml'
@@ -36,7 +38,8 @@ permissions:
 env:
   DOCKERHUB_IMAGE: bock/frankenpress
   # PHP version that receives the unversioned tags (latest, trixie, vips-ffi, ...).
-  # Keep in sync with the php-version lists below and PHP_VERSION in the Dockerfile.
+  # Keep in sync with the php-version lists below and the php-build base image
+  # tag in the Dockerfile (the PHP version is chosen there, not via build-args).
   LATEST_PHP: '8.5'
 
 jobs:
@@ -108,9 +111,6 @@ jobs:
             type=gha,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
             type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
-          build-args: |
-            PHP_VERSION=${{ matrix.php-version }}
-            DEBIAN_VERSION=trixie
           labels: ${{ steps.meta.outputs.labels }}
           provenance: ${{ github.event_name != 'pull_request' && 'mode=max' || 'false' }}
           sbom: ${{ github.event_name != 'pull_request' }}

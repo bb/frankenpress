@@ -14,6 +14,14 @@ docker run -d \
   bock/frankenpress:latest
 ```
 
+For a complete setup with MariaDB, a Redis object cache and an optional phpMyAdmin, see [`examples/compose`](examples/compose/compose.yaml):
+
+```bash
+cd examples/compose
+cp .env.example .env   # set SERVER_NAME and the passwords
+docker compose up -d
+```
+
 ## Available Images
 
 ### Standard Images
@@ -38,6 +46,8 @@ The same pattern applies to the VIPS images, e.g. `php-8.5-vips-ffi-trixie-wp7.1
 All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) for maximum performance and speed. This eliminates QEMU emulation overhead, resulting in significantly faster build times.
 
 The PHP extensions are compiled in a separate build stage on the official [FrankenPHP image](https://hub.docker.com/r/dunglas/frankenphp). The published image is Debian slim plus PHP, FrankenPHP and only the libraries they link against, with no compiler toolchain. That puts the standard image at about 585 MB and the VIPS image at about 650 MB.
+
+The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by digest in the `Dockerfile`, so every build uses exactly the images recorded in git. Dependabot opens a pull request when one of them changes, and CI runs the full integration test on it before it's merged. Debian package updates in the final image still arrive with every weekly rebuild.
 
 ## Links
 
@@ -84,6 +94,7 @@ The PHP extensions are compiled in a separate build stage on the official [Frank
 - `CADDY_GLOBAL_OPTIONS`: inject global options (debug most common)
 - `FRANKENPHP_CONFIG`: inject config under the frankenphp directive
 - `TRUSTED_PROXIES`: proxies whose `X-Forwarded-For` header is trusted for the client IP, as space-separated CIDRs. Defaults to `private_ranges` (10/8, 172.16/12, 192.168/16, 127/8 and their IPv6 equivalents). Set it to your load balancer's range so other hosts on a private network can't spoof their IP. Trusted proxies can also mark a request as HTTPS via `X-Forwarded-Proto` or `CloudFront-Forwarded-Proto`
+- `FIX_PERMISSIONS`: set to `1` and start the container as root (`--user root`, or `user: root` in compose) to repair ownership of mounted folders at startup. Useful when bind mounts or platforms like AWS ECS hand the container root-owned folders, so uploads or certificates can't be written. Files not owned by the web user in `/var/www/html`, `/data/caddy` and `/config/caddy` are chowned (symlinks themselves, never their targets), then the server drops to `www-data`. Without `FIX_PERMISSIONS`, the image runs as `www-data` as before
 - `BLOCK_XMLRPC`: set to `1` to refuse `xmlrpc.php` (403), a common password-guessing target. Off by default because Jetpack and the WordPress mobile apps still use it
 
 #### Wordpress
@@ -132,6 +143,7 @@ When building this repository yourself, `--build-arg WITH_GHOSTSCRIPT=0` leaves 
 - **Security headers:** `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options` are added unless WordPress already sent them.
 - **Verified downloads:** WP-CLI and the VIPS plugin are pinned to releases and checked against their published checksums.
 - **Optional XML-RPC block:** `BLOCK_XMLRPC=1` refuses `xmlrpc.php`.
+- **Pinned base images:** every base image is pinned by digest; updates come in as Dependabot pull requests that CI tests first.
 - **Fewer libraries, fewer CVEs:** the published image has no compiler and none of ImageMagick's extra codec libraries (OpenEXR, DjVu, WMF, …).
 - **WordPress core is writable by the web server user:** dashboard updates need this. Existing sites keep the WordPress version in their `/var/www/html` volume and update through WordPress itself; pulling a newer image doesn't change it.
 

@@ -1,8 +1,11 @@
-# Weekly pull requests that bump the commit-pinned GitHub Actions.
+# Weekly pull requests for the commit-pinned GitHub Actions and the
+# digest-pinned Dockerfile base images (wordpress, dunglas/frankenphp,
+# debian). Each pull request runs the PR build and integration test.
 #
-# The Dockerfile's base images are deliberately not managed here: they use
-# floating tags (dunglas/frankenphp:1-php8.5-trixie, wordpress:latest) built
-# from ARGs, so the weekly scheduled rebuild picks up their updates instead.
+# Base image updates only reach the published images once their pull request
+# is merged; the weekly scheduled rebuild still picks up Debian package
+# updates in the final stage on its own.
+#
 # WP-CLI and the VIPS plugin are pinned with checksums in the Dockerfile and
 # need a manual bump.
 version: 2
@@ -14,3 +17,13 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    # Major versions (Debian 14, FrankenPHP 2, WordPress 8) get their own
+    # pull request; everything else is grouped into one.
+    groups:
+      base-images:
+        update-types: ["minor", "patch"]

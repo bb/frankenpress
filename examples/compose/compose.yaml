@@ -1,0 +1,91 @@
+# FrankenPress with MariaDB and Redis.
+#
+#   cp .env.example .env    # then set SERVER_NAME and the passwords
+#   docker compose up -d
+#   docker compose --profile tools up -d phpmyadmin   # optional, see below
+#
+# For production, pin a dated image tag (e.g. php-8.5-trixie-wp7.1.2-20261002)
+# instead of :latest, and update it deliberately.
+name: frankenpress
+
+services:
+  wordpress:
+    image: bock/frankenpress:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      SERVER_NAME: ${SERVER_NAME:?Set SERVER_NAME in .env}
+      CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_NAME: ${DB_NAME:-wordpress}
+      WORDPRESS_DB_USER: ${DB_USER:-wordpress}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      # Settings for the "Redis Object Cache" plugin (redis-cache); install and
+      # enable it with: docker compose exec wordpress wp plugin install redis-cache --activate
+      #                 docker compose exec wordpress wp redis enable
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_REDIS_HOST', 'redis');
+        define('WP_REDIS_PORT', 6379);
+    volumes:
+      - wordpress:/var/www/html
+      # Keep certificates across container recreation; without this, every
+      # recreate requests new certificates and can hit Let's Encrypt rate limits.
+      - caddy-data:/data/caddy
+      - caddy-config:/config/caddy
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: mariadb:11.8
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DB_NAME:-wordpress}
+      MARIADB_USER: ${DB_USER:-wordpress}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
+    volumes:
+      - db:/var/lib/mysql
+      - ./mariadb/conf.d:/etc/mysql/conf.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Object cache only: no persistence, oldest keys evicted when full
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Optional database UI, only reachable from the host itself. From another
+  # machine, use an SSH tunnel: ssh -L 8080:127.0.0.1:8080 <server>
+  phpmyadmin:
+    image: phpmyadmin:5
+    profiles: ["tools"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PHPMYADMIN_PORT:-8080}:80"
+    environment:
+      PMA_HOST: db
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  wordpress:
+  db:
+  caddy-data:
+  caddy-config:

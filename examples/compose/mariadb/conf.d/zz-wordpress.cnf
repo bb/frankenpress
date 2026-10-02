@@ -1,0 +1,32 @@
+# MariaDB settings for a small-to-medium WordPress site. Size the buffer pool
+# to your host: on a dedicated database server, 50-70% of RAM is typical.
+[mysqld]
+skip-name-resolve
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# InnoDB
+innodb_buffer_pool_size = 512M
+innodb_log_file_size = 256M
+# Write the log to disk once per second instead of at every commit: much
+# faster for WordPress, but a server crash can lose up to ~1s of writes.
+# Set to 1 if that's not acceptable.
+innodb_flush_log_at_trx_commit = 2
+
+# Keep more temporary tables in memory
+tmp_table_size = 64M
+max_heap_table_size = 64M
+
+# Avoid undersized defaults for sites with many plugins/tables
+table_open_cache = 4096
+table_definition_cache = 2048
+thread_cache_size = 64
+
+# Log slow queries to find plugin hot spots:
+# docker compose exec db tail -f /var/lib/mysql/slow.log
+slow_query_log = 1
+slow_query_log_file = /var/lib/mysql/slow.log
+long_query_time = 2
+
+# Drop idle connections
+wait_timeout = 300
