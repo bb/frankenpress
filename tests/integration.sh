@@ -7,12 +7,12 @@
 # the hardening rules, proxy handling and image processing. Needs Docker and
 # curl, jq and python3; exits non-zero if any check fails.
 set -u
-IMG=$1; VARIANT=$2; NET=fpt-$$; WP=fpwp-$$; WP2=fpwp2-$$; WP3=fpwp3-$$; DB=fpdb-$$; MAIL=fpmail-$$; PORT=${PORT:-18081}
+IMG=$1; VARIANT=$2; NET=fpt-$$; WP=fpwp-$$; WP2=fpwp2-$$; WP3=fpwp3-$$; TH=fpthreads-$$; DB=fpdb-$$; MAIL=fpmail-$$; PORT=${PORT:-18081}
 fail=0
 check() { # check <description> <expected> <actual>
   if [ "$2" = "$3" ]; then printf "  ok    %-52s %s\n" "$1" "$3"; else printf "  FAIL  %-52s expected=%s got=%s\n" "$1" "$2" "$3"; fail=1; fi
 }
-cleanup() { docker rm -fv $WP $WP2 $WP3 $DB $MAIL >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
+cleanup() { docker rm -fv $WP $WP2 $WP3 $TH $DB $MAIL >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
 trap cleanup EXIT
 
 echo "=== $IMG ($VARIANT)"
@@ -30,6 +30,23 @@ check "opcache.max_accelerated_files" 20000 "$(docker run --rm "$IMG" php -r 'ec
 check "memory_limit" 256M "$(docker run --rm "$IMG" php -r 'echo ini_get("memory_limit");')"
 check "real hostname uses ACME, not internal CA" "" "$(docker run --rm -e SERVER_NAME=example.com --entrypoint frankenphp "$IMG" adapt --config /etc/caddy/Caddyfile 2>/dev/null | grep -o '"module":"internal"')"
 check "max_input_vars" 5000 "$(docker run --rm "$IMG" php -r 'echo ini_get("max_input_vars");')"
+
+# PHP threads: two per available CPU, at most 4, unless FRANKENPHP_CONFIG
+# sets num_threads. Read from FrankenPHP's own startup log line.
+threads() { # threads <docker run options...> -> "num_threads/max_threads"
+  local c=$TH out=""
+  docker run -d --name $c "$@" "$IMG" >/dev/null
+  for _ in $(seq 1 30); do
+    out=$(docker logs $c 2>&1 | grep -o '"num_threads":[0-9]*,"max_threads":[0-9]*' | grep -oE '[0-9]+' | paste -sd/ -)
+    [ -n "$out" ] && break; sleep 1
+  done
+  docker rm -f $c >/dev/null; echo "$out"
+}
+ncpu=$(docker info -f '{{.NCPU}}'); def=$(( 2 * ncpu < 4 ? 2 * ncpu : 4 ))
+check "PHP threads without a limit ($ncpu CPUs)" "$def/$def" "$(threads)"
+check "PHP threads with --cpus 1" 2/2 "$(threads --cpus 1)"
+check "num_threads in FRANKENPHP_CONFIG wins" 3/3 "$(threads -e FRANKENPHP_CONFIG='num_threads 3')"
+check "max_threads alone keeps the default start" "$def/8" "$(threads -e FRANKENPHP_CONFIG='max_threads 8')"
 
 # FIX_OWNERSHIP: a root-owned volume (with a symlink planted in it) gets
 # repaired at startup, then the process drops to www-data

@@ -30,6 +30,35 @@ if [ -n "${UMASK:-}" ]; then
     umask "$UMASK"
 fi
 
+# PHP threads: FrankenPHP starts two per CPU it sees, e.g. 64 on an
+# unlimited 32-thread host, each allowed memory_limit. Default to two per
+# available CPU (CPU limit or cpuset), but at most 4. num_threads in
+# FRANKENPHP_CONFIG takes precedence; so do workers, whose thread count
+# FrankenPHP has to size itself.
+if [[ "${1:-}" == frankenphp* ]] && ! grep -qE '^[[:space:]]*(num_threads|worker)([[:space:]]|$)' <<<"${FRANKENPHP_CONFIG:-}"; then
+    cpus=$(nproc)
+    quota=max
+    if [ -r /sys/fs/cgroup/cpu.max ]; then
+        read -r quota period </sys/fs/cgroup/cpu.max
+    elif [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then # cgroup v1
+        quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)
+        period=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)
+    fi
+    if [[ "$quota" =~ ^[0-9]+$ ]] && [ "$quota" -gt 0 ]; then
+        limit=$(( (quota + period - 1) / period ))
+        [ "$limit" -lt "$cpus" ] && cpus=$limit
+    fi
+    threads=$(( 2 * cpus < 4 ? 2 * cpus : 4 ))
+    # max_threads below the default would make FrankenPHP refuse to start
+    max=$(grep -oE '^[[:space:]]*max_threads[[:space:]]+[0-9]+' <<<"${FRANKENPHP_CONFIG:-}" | grep -oE '[0-9]+$' || true)
+    if [ -n "$max" ] && [ "$max" -lt "$threads" ]; then
+        threads=$max
+    fi
+    export FRANKENPHP_CONFIG="num_threads $threads
+${FRANKENPHP_CONFIG:-}"
+    echo "FrankenPress: $threads PHP threads (2 per CPU, at most 4; set num_threads in FRANKENPHP_CONFIG to change)"
+fi
+
 # Say once at server start where mail goes, so a missing relay isn't silent
 # (WordPress would otherwise fail every wp_mail() without telling anyone).
 if [[ "${1:-}" == frankenphp* ]]; then
