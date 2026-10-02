@@ -278,7 +278,7 @@ A fresh core volume copies WordPress's bundled extras (Akismet, Hello Dolly, the
 
 The [compose example](examples/compose/compose.yaml) follows MariaDB's current LTS release (`mariadb:lts`) with `MARIADB_AUTO_UPGRADE` on, so the data directory is upgraded when the image moves to a new major version; the image backs up the system tables first. The upgrade is one-way, so take a dump before a major jump anyway:
 
-    docker compose exec db sh -c 'mariadb-dump -uroot -p"$MARIADB_ROOT_PASSWORD" --all-databases --routines --triggers' > backup.sql
+    docker compose exec db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb-dump -uroot --all-databases --routines --triggers' > backup.sql
 
 ## Extending the Image
 
