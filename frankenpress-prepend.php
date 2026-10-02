@@ -8,10 +8,10 @@
  * created. Settings in this file therefore reach new and existing sites alike.
  *
  * Switches accept 1/true/yes/on (case-insensitive); anything else is off,
- * except CORE_UPGRADE_SKIP_NEW_BUNDLED, which is on unless set to
- * 0/false/no/off.
- * Don't also define DISALLOW_FILE_EDIT or DISABLE_WP_CRON in
- * WORDPRESS_CONFIG_EXTRA, or PHP warns that the constant is already defined.
+ * except DISALLOW_FILE_EDIT and CORE_UPGRADE_SKIP_NEW_BUNDLED, which are on
+ * unless set to 0/false/no/off.
+ * Don't also define DISABLE_WP_CRON in WORDPRESS_CONFIG_EXTRA, or PHP warns
+ * that the constant is already defined.
  */
 
 $frankenpress_enabled = static function (string $name): bool {
@@ -44,39 +44,39 @@ if (PHP_SAPI !== 'cli') {
     }
 }
 
-// Turn off the theme and plugin code editors in wp-admin, so a stolen admin
-// login can't be turned into running arbitrary PHP through them.
-if ($frankenpress_enabled('DISALLOW_FILE_EDIT') && !defined('DISALLOW_FILE_EDIT')) {
-    define('DISALLOW_FILE_EDIT', true);
-}
-
 // Stop WordPress from running cron on page loads; use with a real scheduler,
 // e.g. `wp cron event run --due-now` every few minutes.
 if ($frankenpress_enabled('DISABLE_WP_CRON') && !defined('DISABLE_WP_CRON')) {
     define('DISABLE_WP_CRON', true);
 }
 
-// Core updates shouldn't install new default themes and plugins into
-// wp-content (WordPress's CORE_UPGRADE_SKIP_NEW_BUNDLED). On by default;
-// CORE_UPGRADE_SKIP_NEW_BUNDLED=0 turns it off.
+// Settings that are on by default; NAME=0 turns each off:
+// - DISALLOW_FILE_EDIT: no theme and plugin code editors in wp-admin, so a
+//   stolen admin login can't be turned into running arbitrary PHP through
+//   them. WordPress only reads it when checking capabilities.
+// - CORE_UPGRADE_SKIP_NEW_BUNDLED: core updates don't install new default
+//   themes and plugins into wp-content.
 //
-// Many sites define this constant in WORDPRESS_CONFIG_EXTRA already. This
-// file runs before wp-config.php, so defining it here would make their
+// Many sites define these constants in WORDPRESS_CONFIG_EXTRA already. This
+// file runs before wp-config.php, so defining them here would make their
 // define() warn "Constant already defined". Instead, pre-register a callback
 // on muplugins_loaded, which WordPress runs after wp-config.php: it only
-// defines the constant if the site didn't. WordPress picks up hooks placed
+// defines a constant if the site didn't. WordPress picks up hooks placed
 // in $wp_filter before it loads (WP_Hook::build_preinitialized_hooks), so
 // this needs no mu-plugin in the volume and works for existing sites.
-if (!$frankenpress_disabled('CORE_UPGRADE_SKIP_NEW_BUNDLED')) {
-    $GLOBALS['wp_filter']['muplugins_loaded'][10][] = [
-        'function' => static function (): void {
-            if (!defined('CORE_UPGRADE_SKIP_NEW_BUNDLED')) {
-                define('CORE_UPGRADE_SKIP_NEW_BUNDLED', true);
-            }
-        },
-        'accepted_args' => 0,
-    ];
+foreach (['DISALLOW_FILE_EDIT', 'CORE_UPGRADE_SKIP_NEW_BUNDLED'] as $frankenpress_name) {
+    if (!$frankenpress_disabled($frankenpress_name)) {
+        $GLOBALS['wp_filter']['muplugins_loaded'][10][] = [
+            'function' => static function () use ($frankenpress_name): void {
+                if (!defined($frankenpress_name)) {
+                    define($frankenpress_name, true);
+                }
+            },
+            'accepted_args' => 0,
+        ];
+    }
 }
+unset($frankenpress_name);
 
 // UMASK (e.g. 0002), for sites sharing wp-content with another user through
 // a common group. The entrypoint sets it for the server and everything it
