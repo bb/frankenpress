@@ -37,6 +37,8 @@ The same pattern applies to the VIPS images, e.g. `php-8.5-vips-ffi-trixie-wp7.1
 
 All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) for maximum performance and speed. This eliminates QEMU emulation overhead, resulting in significantly faster build times.
 
+The PHP extensions are compiled in a separate build stage on the official [FrankenPHP image](https://hub.docker.com/r/dunglas/frankenphp). The published image is Debian slim plus PHP, FrankenPHP and only the libraries they link against, with no compiler toolchain. That puts the standard image at about 585 MB and the VIPS image at about 650 MB.
+
 ## Links
 
 - [Docker Hub](https://hub.docker.com/r/bock/frankenpress)
@@ -81,7 +83,8 @@ All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) fo
 - `SERVER_NAME`: change the addresses on which to listen. Real hostnames get a publicly trusted certificate (Let's Encrypt/ZeroSSL) automatically; `localhost` and IP addresses use Caddy's local CA
 - `CADDY_GLOBAL_OPTIONS`: inject global options (debug most common)
 - `FRANKENPHP_CONFIG`: inject config under the frankenphp directive
-- `TRUSTED_PROXIES`: proxies whose `X-Forwarded-For` header is trusted for the client IP, as space-separated CIDRs. Defaults to `private_ranges` (10/8, 172.16/12, 192.168/16, 127/8 and their IPv6 equivalents). Set it to your load balancer's range so other hosts on a private network can't spoof their IP
+- `TRUSTED_PROXIES`: proxies whose `X-Forwarded-For` header is trusted for the client IP, as space-separated CIDRs. Defaults to `private_ranges` (10/8, 172.16/12, 192.168/16, 127/8 and their IPv6 equivalents). Set it to your load balancer's range so other hosts on a private network can't spoof their IP. Trusted proxies can also mark a request as HTTPS via `X-Forwarded-Proto` or `CloudFront-Forwarded-Proto`
+- `BLOCK_XMLRPC`: set to `1` to refuse `xmlrpc.php` (403), a common password-guessing target. Off by default because Jetpack and the WordPress mobile apps still use it
 
 #### Wordpress
 
@@ -91,7 +94,7 @@ All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) fo
 - `WORDPRESS_DB_HOST`: The WordPress database host.
 - `WORDPRESS_TABLE_PREFIX`: The WordPress database table prefix.
 - `WORDPRESS_DEBUG`: Turns on WordPress Debug.
-- `FORCE_HTTPS`: Set to `1` to tell WordPress every request is HTTPS. Useful behind a load balancer that terminates TLS. Defaults to `0`.
+- `FORCE_HTTPS`: Set to `1` to tell WordPress every request is HTTPS. Usually not needed behind a load balancer that terminates TLS, since requests a trusted proxy forwards as HTTPS are detected automatically (see `TRUSTED_PROXIES`). Defaults to `0`.
 - `WORDPRESS_CONFIG_EXTRA`: use this for adding WP_HOME, WP_SITEURL, etc
 
 ### WP-CLI
@@ -104,6 +107,23 @@ All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) fo
 
 The image's `HEALTHCHECK` runs a tiny PHP script on an internal port (`127.0.0.1:2080`, not reachable from outside the container). The container is healthy when Caddy answers and PHP executes, independent of `SERVER_NAME` and of the database, so a database outage doesn't make orchestrators restart it.
 
+## Extending the Image
+
+The published image has no compiler. To add a PHP extension in your own image, install the build tools for that step, as listed in `$PHPIZE_DEPS`, then remove them again:
+
+```dockerfile
+FROM bock/frankenpress:latest
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends $PHPIZE_DEPS \
+    && install-php-extensions xdebug \
+    && apt-get purge -y --auto-remove $PHPIZE_DEPS \
+    && rm -rf /var/lib/apt/lists/*
+USER www-data
+```
+
+When building this repository yourself, `--build-arg WITH_GHOSTSCRIPT=0` leaves out Ghostscript, which saves about 55 MB and removes PDF parsing entirely, but also turns off PDF thumbnails.
+
 ## Security Hardening
 
 - **No PHP from uploads:** `.php`, `.phtml`, `.phar` and similar files under `wp-content/uploads` return 404, so a vulnerable upload form can't become remote code execution.
@@ -111,6 +131,8 @@ The image's `HEALTHCHECK` runs a tiny PHP script on an internal port (`127.0.0.1
 - **Restricted image formats:** Imagick only handles GIF, JPEG, PNG, WebP, AVIF and HEIC, plus reading PDFs for thumbnails. PostScript, SVG and ImageMagick's other formats are refused, which keeps uploads away from rarely audited parsers. In the VIPS images, `VIPS_BLOCK_UNTRUSTED=1` likewise limits libvips to its well-audited loaders, so its PDF, SVG and ImageMagick loaders are off (PDF thumbnails still come from Imagick).
 - **Security headers:** `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options` are added unless WordPress already sent them.
 - **Verified downloads:** WP-CLI and the VIPS plugin are pinned to releases and checked against their published checksums.
+- **Optional XML-RPC block:** `BLOCK_XMLRPC=1` refuses `xmlrpc.php`.
+- **Fewer libraries, fewer CVEs:** the published image has no compiler and none of ImageMagick's extra codec libraries (OpenEXR, DjVu, WMF, …).
 - **WordPress core is writable by the web server user:** dashboard updates need this. Existing sites keep the WordPress version in their `/var/www/html` volume and update through WordPress itself; pulling a newer image doesn't change it.
 
 ## Questions
@@ -140,3 +162,5 @@ What about SSL cert? Use `SERVER_NAME=mydomain.com, :80`
 Caddy, the underlying application server is flexible enough for multiple entries. Separate multiple values with a comma. It will still request certificate.
 
 What about visitor IPs? Behind a proxy, WordPress would otherwise see every visitor as the proxy's address, so login limiters and security plugins would block everyone at once. The image takes the client IP from `X-Forwarded-For` when the request comes from a trusted proxy; see `TRUSTED_PROXIES` above.
+
+What about HTTPS behind a TLS-terminating proxy? When a trusted proxy sends `X-Forwarded-Proto: https` (or CloudFront's `CloudFront-Forwarded-Proto`), WordPress treats the request as HTTPS, so redirects and URLs use `https://`. `FORCE_HTTPS=1` is still available if your proxy doesn't send either header.

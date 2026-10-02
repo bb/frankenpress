@@ -22,6 +22,7 @@ check "php -v without warnings" 0 "$(grep -ciE 'warning|unable to load' <<<"$out
 for p in git unzip libnss3-tools; do
   check "package $p removed" no "$(docker run --rm --entrypoint sh "$IMG" -c "dpkg -s $p 2>/dev/null | grep -q '^Status: install ok installed' && echo yes || echo no")"
 done
+check "ImageMagick extra coders not installed" no "$(docker run --rm --entrypoint sh "$IMG" -c "dpkg -s libmagickcore-7.q16-10-extra 2>/dev/null | grep -q '^Status: install ok installed' && echo yes || echo no")"
 missing=$(docker run --rm --entrypoint sh "$IMG" -c 'for f in $(php -r "echo ini_get(\"extension_dir\");")/*.so; do ldd "$f" | grep "not found"; done' 2>&1 | wc -l | tr -d ' ')
 check "all extension libraries resolve (ldd)" 0 "$missing"
 check "wp-cli works" yes "$(docker run --rm "$IMG" wp --version 2>/dev/null | grep -q '^WP-CLI [0-9]' && echo yes || echo no)"
@@ -67,6 +68,12 @@ check "page has no long cache" 0 "$(grep -ci 'max-age=2592000' <<<"$hdr")"
 docker exec $WP sh -c 'echo "<?php echo \$_SERVER[\"REMOTE_ADDR\"];" > ip.php'
 check "REMOTE_ADDR from X-Forwarded-For (trusted proxy)" 203.0.113.7 "$(curl -s -H 'X-Forwarded-For: 203.0.113.7' $B/ip.php)"
 check "REMOTE_ADDR without proxy header is the peer" no "$(curl -s $B/ip.php | grep -q '^203\.0\.113\.7$' && echo yes || echo no)"
+docker exec $WP sh -c 'echo "<?php require __DIR__ . \"/wp-load.php\"; echo is_ssl() ? \"https\" : \"http\";" > ssl.php'
+check "HTTPS via X-Forwarded-Proto from trusted proxy" https "$(curl -s -H 'X-Forwarded-Proto: https' $B/ssl.php)"
+check "HTTPS via CloudFront-Forwarded-Proto" https "$(curl -s -H 'CloudFront-Forwarded-Proto: https' $B/ssl.php)"
+check "plain HTTP stays HTTP" http "$(curl -s $B/ssl.php)"
+check "forged internal HTTPS marker ignored" http "$(curl -s -H 'X-Frankenpress-Https: on' $B/ssl.php)"
+check "xmlrpc.php allowed by default" 405 "$(code /xmlrpc.php)"
 check "wp-cli works from any directory" yes "$(docker exec -w / $WP wp core version >/dev/null 2>&1 && echo yes || echo no)"
 check "healthcheck endpoint" ok "$(docker exec $WP curl -fsS http://127.0.0.1:2080/healthz.php 2>/dev/null)"
 for _ in $(seq 1 20); do st=$(docker inspect $WP --format '{{.State.Health.Status}}'); [ "$st" != starting ] && break; sleep 3; done

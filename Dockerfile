@@ -8,7 +8,8 @@
 # - WordPress: The world's most popular CMS
 #
 # The image is optimized for:
-# - Minimal layers (better caching and smaller image size)
+# - Size: PHP extensions are compiled in a build stage; the final image is
+#   Debian slim plus only the libraries those binaries need (no compiler)
 # - Layer ordering based on change frequency (faster rebuilds)
 # - Security (runs as non-root user)
 # - Performance (OPcache, APCu, object cache extensions)
@@ -37,55 +38,21 @@ ARG FRANKENPHP_VERSION=1
 FROM wordpress:$WORDPRESS_VERSION AS wp
 
 # -----------------------------------------------------------------------------
-# Stage 2: Standard FrankenPress Image
+# Stage 2: PHP Build
 # -----------------------------------------------------------------------------
-# Base image is the official FrankenPHP image, which is rebuilt for every PHP
-# release and already ships the Vulcain and Brotli Caddy modules, the file
-# watcher library and install-php-extensions.
+# Compiles the PHP extensions on the official FrankenPHP image, which is
+# rebuilt for every PHP release and ships the Vulcain and Brotli Caddy modules,
+# the file watcher library and install-php-extensions. It also carries a full
+# compiler toolchain (~250 MB), which is why only its /usr/local is copied
+# into the final image.
 # Format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_VERSION} (multi-arch)
 # See: https://hub.docker.com/r/dunglas/frankenphp
-FROM dunglas/frankenphp:${FRANKENPHP_VERSION}-php${PHP_VERSION}-${DEBIAN_VERSION} AS standard
+FROM dunglas/frankenphp:${FRANKENPHP_VERSION}-php${PHP_VERSION}-${DEBIAN_VERSION} AS php-build
 
-# -----------------------------------------------------------------------------
-# Metadata Labels
-# -----------------------------------------------------------------------------
-# OCI-compliant image labels for container registries and tooling
-# See: https://github.com/opencontainers/image-spec/blob/main/annotations.md
-LABEL org.opencontainers.image.title=FrankenPress \
-      org.opencontainers.image.description="Optimized WordPress containers to run everywhere. Built with FrankenPHP & Caddy." \
-      org.opencontainers.image.source=https://github.com/notglossy/frankenpress \
-      org.opencontainers.image.licenses=MIT \
-      org.opencontainers.image.vendor="Not Glossy"
+# bash with pipefail, so a library without a Debian package fails the build
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# -----------------------------------------------------------------------------
-# Environment Variables
-# -----------------------------------------------------------------------------
-# FORCE_HTTPS: Set to 1 to force HTTPS in WordPress (sets $_SERVER['HTTPS'])
-# PHP_INI_SCAN_DIR: Directory for additional PHP configuration files
-# PAGER: Default pager for terminal sessions (useful for WP-CLI)
-ENV FORCE_HTTPS=0 \
-    PHP_INI_SCAN_DIR=$PHP_INI_DIR/conf.d \
-    PAGER=more
-
-# -----------------------------------------------------------------------------
-# System Dependencies and PHP Extensions
-# -----------------------------------------------------------------------------
-# Combined into a single layer to minimize image size and improve build cache.
-# This layer installs runtime and build dependencies, compiles PHP extensions,
-# then removes build-only dependencies to reduce final image size.
-#
-# Runtime packages (kept in final image):
-# - ca-certificates: SSL/TLS certificate validation
-# - ghostscript: lets Imagick render thumbnails of uploaded PDFs
-# - curl: HTTP client for WP-CLI and the healthcheck
-# - libcap2-bin: Provides setcap utility for granting capabilities
-#
-# install-php-extensions installs each extension's build dependencies itself
-# and removes them again, keeping only the runtime libraries.
-#
-# OPcache is not installed here: it is built into PHP 8.5 and always present.
-#
-# PHP extensions installed via install-php-extensions script:
+# PHP extensions installed via install-php-extensions:
 # - bcmath: Arbitrary precision mathematics (WooCommerce, etc.)
 # - exif: Image metadata extraction
 # - gd: Image manipulation library
@@ -97,14 +64,19 @@ ENV FORCE_HTTPS=0 \
 # - apcu: In-memory user cache
 # - redis: Object caching and sessions
 # - igbinary/msgpack: Efficient serialization for caching
+# - ffi: only enabled in the vips-ffi image (its .ini is removed here)
+#
+# OPcache is not installed here: it is built into PHP 8.5 and always present.
+#
+# Afterwards, every shared library the PHP and FrankenPHP binaries link
+# against is mapped to its Debian package, so the final stage can install
+# exactly those (written to /runtime-packages.txt), and files only needed for
+# linking are dropped from /usr/local. Libraries are looked up by their
+# resolved /usr path first: for Debian's t64 packages the /lib path only
+# shows up as a "diversion by <package>" line, which is parsed as well.
 #
 # See: https://github.com/mlocati/docker-php-extension-installer
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    ghostscript \
-    curl \
-    libcap2-bin \
-    && install-php-extensions \
+RUN install-php-extensions \
         bcmath \
         exif \
         gd \
@@ -117,12 +89,101 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         redis \
         igbinary \
         msgpack \
-    # Clean up additional bloat
+        ffi \
+    && rm -f "$PHP_INI_DIR/conf.d/docker-php-ext-ffi.ini" \
+    && find /usr/local -type f \( -name '*.so' -o -name '*.so.*' -o -perm -u+x \) -print0 \
+        | { xargs -0 ldd 2>/dev/null || true; } \
+        | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' \
+        | grep -v '^/usr/local/' \
+        | sort -u \
+        | while read -r lib; do \
+            dpkg -S "$(realpath "$lib")" 2>/dev/null || dpkg -S "$lib" 2>/dev/null || { echo "no package owns $lib" >&2; exit 1; }; \
+        done \
+        | sed -E 's/^diversion by ([^ ]+) (from|to): .*/\1:/' \
+        | cut -d: -f1 \
+        | sort -u > /runtime-packages.txt \
+    && echo "Runtime packages:" && cat /runtime-packages.txt \
+    && rm -rf /usr/local/lib/libwatcher-c.a \
+        /usr/local/php/man
+
+# -----------------------------------------------------------------------------
+# Stage 3: Standard FrankenPress Image
+# -----------------------------------------------------------------------------
+FROM debian:${DEBIAN_VERSION}-slim AS standard
+
+# -----------------------------------------------------------------------------
+# Metadata Labels
+# -----------------------------------------------------------------------------
+# OCI-compliant image labels for container registries and tooling. CI adds
+# source, revision, version and creation date.
+# See: https://github.com/opencontainers/image-spec/blob/main/annotations.md
+LABEL org.opencontainers.image.title=FrankenPress \
+      org.opencontainers.image.description="Optimized WordPress containers to run everywhere. Built with FrankenPHP & Caddy." \
+      org.opencontainers.image.source=https://github.com/bb/frankenpress \
+      org.opencontainers.image.licenses=MIT
+
+# -----------------------------------------------------------------------------
+# Environment Variables
+# -----------------------------------------------------------------------------
+# PHP_INI_DIR, XDG_* and GODEBUG mirror the FrankenPHP image this is built from.
+# FORCE_HTTPS: Set to 1 to force HTTPS in WordPress (sets $_SERVER['HTTPS'])
+# PAGER: Default pager for terminal sessions (useful for WP-CLI)
+ENV PHP_INI_DIR=/usr/local/etc/php \
+    XDG_CONFIG_HOME=/config \
+    XDG_DATA_HOME=/data \
+    GODEBUG=cgocheck=0 \
+    PHPIZE_DEPS="autoconf dpkg-dev file g++ gcc libc-dev make pkg-config re2c" \
+    FORCE_HTTPS=0 \
+    PAGER=more
+
+# -----------------------------------------------------------------------------
+# System Dependencies
+# -----------------------------------------------------------------------------
+# - ca-certificates: SSL/TLS certificate validation
+# - curl: HTTP client for WP-CLI and the healthcheck
+# - xz-utils: unpacks the PHP source when install-php-extensions is used in
+#   images built on top of this one
+# - ghostscript: lets Imagick render thumbnails of uploaded PDFs. Build with
+#   --build-arg WITH_GHOSTSCRIPT=0 to leave it out (~50 MB, and no PDF parsing
+#   at all) if you don't need PDF thumbnails.
+# - the runtime libraries of PHP, FrankenPHP and the extensions, as found in
+#   the build stage. Recommended packages are skipped, which also keeps out
+#   ImageMagick's extra coders (OpenEXR, DjVu, WMF, ...).
+# - libheif plugins: AVIF encoding (aomenc) and AVIF/HEIC decoding (dav1d,
+#   libde265) for Imagick. libheif only recommends them, so the library
+#   list above doesn't pull them in.
+ARG WITH_GHOSTSCRIPT=1
+ARG DEBIAN_FRONTEND=noninteractive
+RUN --mount=type=bind,from=php-build,source=/runtime-packages.txt,target=/mnt/runtime-packages.txt \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libheif-plugin-aomenc \
+        libheif-plugin-dav1d \
+        libheif-plugin-libde265 \
+        xz-utils \
+        $( [ "$WITH_GHOSTSCRIPT" = 1 ] && echo ghostscript ) \
+        $(cat /mnt/runtime-packages.txt) \
     && rm -rf /var/lib/apt/lists/* \
         /tmp/* \
         /var/tmp/* \
         /usr/share/doc/* \
         /usr/share/man/*
+
+# PHP, FrankenPHP (whose binary keeps its cap_net_bind_service capability, so
+# it can bind ports 80/443 as a non-root user), the extensions and their
+# configuration
+COPY --from=php-build /usr/local /usr/local
+# PHP source, headers (in /usr/local) and PHPIZE_DEPS keep install-php-extensions
+# working in images built on top of this one: it installs the compiler for the
+# build and removes it again, e.g. FROM bock/frankenpress / USER root /
+# RUN install-php-extensions xdebug
+COPY --from=php-build /usr/src/php.tar.xz /usr/src/php.tar.xz.asc /usr/src/
+# Fail the build if any binary or extension still misses a library
+RUN ldconfig \
+    && missing=$(find /usr/local -type f \( -name '*.so' -o -name '*.so.*' -o -perm -u+x \) -exec ldd {} + 2>/dev/null | grep 'not found' | sort -u) \
+    && { [ -z "$missing" ] || { echo "Missing runtime libraries:" >&2; echo "$missing" >&2; exit 1; }; } \
+    && mkdir -p /etc/caddy /data/caddy /config/caddy /var/www/html
 
 # -----------------------------------------------------------------------------
 # PHP Configuration
@@ -189,19 +250,17 @@ RUN curl -fsSL -o /usr/local/bin/wp \
 #
 # Steps:
 # 1. Create user if it doesn't exist (default: www-data)
-# 2. Grant FrankenPHP permission to bind to ports 80/443 without root
-# 3. Set ownership of the Caddy and web root directories
+# 2. Set ownership of the Caddy and web root directories
 #
 # NOTE: On some platforms (e.g., AWS ECS), volume mounts are owned by root.
 # You may need to use USER_NAME=root or modify the entrypoint to chown volumes.
 ARG USER_NAME=www-data
 
-RUN if id "${USER_NAME}" &>/dev/null; then \
+RUN if id "${USER_NAME}" >/dev/null 2>&1; then \
         echo "User ${USER_NAME} already exists"; \
     else \
         useradd -m ${USER_NAME}; \
     fi \
-    && setcap CAP_NET_BIND_SERVICE=+eip /usr/local/bin/frankenphp \
     && chown -R ${USER_NAME}:${USER_NAME} /data/caddy \
         /config/caddy \
         /var/www/html
@@ -225,14 +284,15 @@ COPY --from=wp --chown=${USER_NAME}:${USER_NAME} /usr/local/bin/docker-entrypoin
 # -----------------------------------------------------------------------------
 # Modify the WordPress Docker entrypoint to work with FrankenPHP instead of PHP-FPM.
 # Also inject WordPress configuration:
-# - FORCE_HTTPS support: Enables HTTPS when FORCE_HTTPS env var is set
+# - HTTPS: on when FORCE_HTTPS is set, or when Caddy marked the request as
+#   forwarded over HTTPS by a trusted proxy (see the Caddyfile)
 # - FS_METHOD=direct: Direct filesystem access (no FTP needed)
 # - set_time_limit(300): Allow long-running operations (imports, updates, etc.)
 RUN sed -i \
         -e 's/\[ "$1" = '\''php-fpm'\'' \]/\[\[ "$1" == frankenphp* \]\]/g' \
         -e 's/php-fpm/frankenphp/g' \
         /usr/local/bin/docker-entrypoint.sh \
-    && sed -i 's/<?php/<?php if (!!getenv("FORCE_HTTPS")) { \$_SERVER["HTTPS"] = "on"; } define( "FS_METHOD", "direct" ); set_time_limit(300); /g' /usr/src/wordpress/wp-config-docker.php
+    && sed -i 's/<?php/<?php if (!!getenv("FORCE_HTTPS") || ($_SERVER["HTTP_X_FRANKENPRESS_HTTPS"] ?? "") === "on") { \$_SERVER["HTTPS"] = "on"; } define( "FS_METHOD", "direct" ); set_time_limit(300); /g' /usr/src/wordpress/wp-config-docker.php
 
 # -----------------------------------------------------------------------------
 # Custom Configuration Files
@@ -255,13 +315,15 @@ RUN mkdir -p /usr/local/share/frankenpress/health \
 
 # Healthy when Caddy answers and PHP executes. Deliberately independent of the
 # database, so a database outage doesn't make orchestrators restart the
-# container. Replaces the base image's check of Caddy's admin API.
+# container.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:2080/healthz.php || exit 1
 
 # -----------------------------------------------------------------------------
 # Container Runtime Configuration
 # -----------------------------------------------------------------------------
+EXPOSE 80 443 443/udp
+
 # Define persistent volume mount point for WordPress files
 VOLUME /var/www/html
 
@@ -288,10 +350,11 @@ ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["frankenphp", "run", "--config", "/etc/caddy/Caddyfile"]
 
 # -----------------------------------------------------------------------------
-# Stage 3: VIPS/FFI Variant
+# Stage 4: VIPS/FFI Variant
 # -----------------------------------------------------------------------------
-# Adds libvips (with HEIF/AVIF support) and the FFI extension, plus the
-# vips-image-editor-ffi plugin so WordPress uses libvips for image processing.
+# Adds libvips (with HEIF/AVIF support), enables the FFI extension built in
+# the php-build stage, and installs the vips-image-editor-ffi plugin so
+# WordPress uses libvips for image processing.
 # Build with: docker build --target vips-ffi .
 FROM standard AS vips-ffi
 
@@ -312,7 +375,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libaom3 \
         libheif-plugin-aomdec \
         libheif-plugin-aomenc \
-    && install-php-extensions ffi \
     && rm -rf /var/cache/apt/archives \
         /var/lib/apt/lists/*
 
@@ -325,7 +387,10 @@ RUN php -r '$z = new ZipArchive(); $z->open("/tmp/vips-image-editor-ffi.zip") ==
     && rm -f /tmp/vips-image-editor-ffi.zip \
     && chown -R ${USER_NAME}:${USER_NAME} /usr/src/wordpress/wp-content/plugins \
     && echo 'zend.max_allowed_stack_size=-1' >> $PHP_INI_DIR/conf.d/stack-size.ini \
-    && echo 'ffi.enable=true' >> $PHP_INI_DIR/conf.d/docker-php-ext-ffi.ini
+    && { \
+        echo 'extension=ffi'; \
+        echo 'ffi.enable=true'; \
+    } > $PHP_INI_DIR/conf.d/docker-php-ext-ffi.ini
 
 USER $USER_NAME
 
