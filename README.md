@@ -116,12 +116,12 @@ The official image's entrypoint creates `wp-config.php` from these variables and
 - `WORDPRESS_TABLE_PREFIX`: The WordPress database table prefix.
 - `WORDPRESS_DEBUG`: Turns on WordPress Debug.
 - `FORCE_HTTPS`: Set to `1` to tell WordPress every request is HTTPS. Usually not needed behind a load balancer that terminates TLS, since requests a trusted proxy forwards as HTTPS are detected automatically (see `TRUSTED_PROXIES`). Defaults to `0`.
-- `DISALLOW_FILE_EDIT`: set to `1` to turn off the theme and plugin code editors in wp-admin, so a stolen admin login can't be turned into running PHP through them. Recommended for production
+- `DISALLOW_FILE_EDIT`: on by default, so wp-admin has no theme and plugin code editors, and a stolen admin login can't be turned into running PHP through them. Set to `0` to bring the editors back. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value. Earlier images had it off unless set to `1`, which still works
 - `DISABLE_WP_CRON`: set to `1` to stop WordPress from running scheduled tasks on page loads, when you run them from a real scheduler instead, e.g. `wp cron event run --due-now` every few minutes
 - `CORE_UPGRADE_SKIP_NEW_BUNDLED`: on by default, so core updates don't install new default themes and plugins into `wp-content`. Set to `0` to turn it off. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value
 - `WORDPRESS_CONFIG_EXTRA`: PHP added to `wp-config.php` when it's created, e.g. `define('WP_HOME', 'https://example.com');`
 
-`FORCE_HTTPS`, `DISALLOW_FILE_EDIT`, `DISABLE_WP_CRON` and `CORE_UPGRADE_SKIP_NEW_BUNDLED` are applied on every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created. Don't also define `DISALLOW_FILE_EDIT` or `DISABLE_WP_CRON` in `WORDPRESS_CONFIG_EXTRA`.
+`FORCE_HTTPS`, `DISALLOW_FILE_EDIT`, `DISABLE_WP_CRON` and `CORE_UPGRADE_SKIP_NEW_BUNDLED` are applied on every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created. Don't also define `DISABLE_WP_CRON` in `WORDPRESS_CONFIG_EXTRA`.
 
 ### WP-CLI
 
