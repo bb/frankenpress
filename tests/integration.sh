@@ -28,6 +28,7 @@ check "all extension libraries resolve (ldd)" 0 "$missing"
 for t in mariadb mariadb-dump mariadb-import; do
   check "$t works" yes "$(docker run --rm --entrypoint $t "$IMG" --version 2>/dev/null | grep -q 'from 1[0-9]\.' && echo yes || echo no)"
 done
+check "invalid CRON_INTERVAL stops with a message" "invalid CRON_INTERVAL" "$(docker run --rm -e CRON_INTERVAL=1m "$IMG" 2>&1 | grep -o 'invalid CRON_INTERVAL')"
 check "wp-cli works" yes "$(docker run --rm "$IMG" wp --version 2>/dev/null | grep -q '^WP-CLI [0-9]' && echo yes || echo no)"
 check "opcache.max_accelerated_files" 20000 "$(docker run --rm "$IMG" php -r 'echo ini_get("opcache.max_accelerated_files");')"
 check "memory_limit" 256M "$(docker run --rm "$IMG" php -r 'echo ini_get("memory_limit");')"
@@ -66,11 +67,11 @@ docker volume rm $VOL >/dev/null
 docker network create $NET >/dev/null
 # SMTP sink with an HTTP API, to check mail delivery
 docker run -d --name $MAIL --network $NET -p $((PORT + 2)):8025 axllent/mailpit >/dev/null
-docker run -d --name $DB --network $NET -e MARIADB_ROOT_PASSWORD=r -e MARIADB_DATABASE=wp -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11 >/dev/null
+docker run -d --name $DB --network $NET -e MARIADB_ROOT_PASSWORD=r -e MARIADB_DATABASE=wp -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:lts >/dev/null
 # A server without TLS (MariaDB before 11.4), for the client tools below
 docker run -d --name $DBOLD --network $NET -e MARIADB_ROOT_PASSWORD=r mariadb:10.11 >/dev/null
 for _ in $(seq 1 40); do docker exec $DB mariadb -uwp -pwp -e 'select 1' wp >/dev/null 2>&1 && break; sleep 2; done
-docker run -d --name $WP --network $NET -p $PORT:80 -e UMASK=0002 -e SUPERCACHE=1 -e HSTS=max-age=300 -e MSMTP_HOST=$MAIL -e MSMTP_PORT=1025 -e MSMTP_TLS=off -e MSMTP_FROM=noreply@site.example -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
+docker run -d --name $WP --network $NET -p $PORT:80 -e UMASK=0002 -e SUPERCACHE=1 -e CRON_INTERVAL=5 -e HSTS=max-age=300 -e MSMTP_HOST=$MAIL -e MSMTP_PORT=1025 -e MSMTP_TLS=off -e MSMTP_FROM=noreply@site.example -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp "$IMG" >/dev/null
 for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:$PORT/ && break; sleep 1; done
 docker exec $WP wp core install --url=http://localhost:$PORT --title=T --admin_user=a --admin_password=a --admin_email=a@example.com --skip-email >/dev/null 2>&1
 B=http://localhost:$PORT
@@ -159,8 +160,8 @@ skip_bundled='echo defined("CORE_UPGRADE_SKIP_NEW_BUNDLED") ? var_export(CORE_UP
 docker exec $WP sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $skip_bundled' > skip.php"
 check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (web)" true "$(curl -s $B/skip.php)"
 check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (wp-cli)" true "$(docker exec $WP wp eval "$skip_bundled" 2>/dev/null)"
-docker run -d --name $WP2 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e "WORDPRESS_CONFIG_EXTRA=define('CORE_UPGRADE_SKIP_NEW_BUNDLED', false); define('DISALLOW_FILE_EDIT', false);" "$IMG" >/dev/null
-docker run -d --name $WP3 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e CORE_UPGRADE_SKIP_NEW_BUNDLED=0 -e DISALLOW_FILE_EDIT=0 -e DISALLOW_PLUGIN_THEME_INSTALL=0 -e DISABLE_APPLICATION_PASSWORDS=0 "$IMG" >/dev/null
+docker run -d --name $WP2 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e "WORDPRESS_CONFIG_EXTRA=define('CORE_UPGRADE_SKIP_NEW_BUNDLED', false); define('DISALLOW_FILE_EDIT', false); define('DISABLE_WP_CRON', false);" "$IMG" >/dev/null
+docker run -d --name $WP3 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e CRON=0 -e CORE_UPGRADE_SKIP_NEW_BUNDLED=0 -e DISALLOW_FILE_EDIT=0 -e DISALLOW_PLUGIN_THEME_INSTALL=0 -e DISABLE_APPLICATION_PASSWORDS=0 "$IMG" >/dev/null
 for c in $WP2 $WP3; do
   for _ in $(seq 1 30); do docker exec $c curl -s -o /dev/null http://127.0.0.1/healthz 2>/dev/null && break; sleep 1; done
 done
@@ -169,6 +170,8 @@ check "site's own define in WORDPRESS_CONFIG_EXTRA wins (web)" false "$(docker e
 check "site's own define in WORDPRESS_CONFIG_EXTRA wins (wp-cli)" false "$(docker exec $WP2 wp eval "$skip_bundled" 2>/dev/null)"
 docker exec $WP2 sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $dfe' > dfe.php"
 check "site's own DISALLOW_FILE_EDIT define wins (web)" false "$(docker exec $WP2 curl -s http://127.0.0.1/dfe.php)"
+dwc='echo var_export(defined("DISABLE_WP_CRON") ? DISABLE_WP_CRON : "undefined", true);'
+check "site's own DISABLE_WP_CRON define wins (wp-cli)" false "$(docker exec $WP2 wp eval "$dwc" 2>/dev/null)"
 check "no 'already defined' warning for the site's own define" 0 "$(docker logs $WP2 2>&1 | grep -ci 'already defined')"
 docker exec $WP3 sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $skip_bundled' > skip.php"
 check "CORE_UPGRADE_SKIP_NEW_BUNDLED=0 turns it off (web)" undefined "$(docker exec $WP3 curl -s http://127.0.0.1/skip.php)"
@@ -179,7 +182,23 @@ check "DISALLOW_FILE_EDIT=0 turns it off (wp-cli)" "'undefined'" "$(docker exec 
 docker exec $WP3 sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $caps' > caps.php; echo '<?php require __DIR__ . \"/wp-load.php\"; $apw' > apw.php"
 check "DISALLOW_PLUGIN_THEME_INSTALL=0 allows installs again" 1111111 "$(docker exec $WP3 curl -s http://127.0.0.1/caps.php)"
 check "DISABLE_APPLICATION_PASSWORDS=0 brings them back" sa "$(docker exec $WP3 curl -s -H 'X-Forwarded-Proto: https' http://127.0.0.1/apw.php)"
+check "CRON=0: no cron runner" 0 "$(docker logs $WP3 2>&1 | grep -c 'FrankenPress: WP-Cron runs')"
+check "CRON=0: page loads run WP-Cron again (DISABLE_WP_CRON unset)" "'undefined'" "$(docker exec $WP3 wp eval "$dwc" 2>/dev/null)"
 docker rm -fv $WP3 >/dev/null
+
+# WP-Cron runner ($WP, CRON_INTERVAL=5): page loads don't run cron, the
+# runner does, with plugins loaded
+check "cron runner announced at startup" 1 "$(docker logs $WP 2>&1 | grep -c 'FrankenPress: WP-Cron runs every 5s')"
+docker exec $WP sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $dwc' > dwc.php"
+check "DISABLE_WP_CRON follows the runner (web)" true "$(curl -s $B/dwc.php)"
+check "DISABLE_WP_CRON follows the runner (wp-cli)" true "$(docker exec $WP wp eval "$dwc" 2>/dev/null)"
+docker exec $WP sh -c 'mkdir -p wp-content/plugins/fp-cron-test && echo "<?php
+/* Plugin Name: FP cron test */
+add_action(\"fp_cron_test\", function () { update_option(\"fp_cron_ran\", \"yes\"); });" > wp-content/plugins/fp-cron-test/fp-cron-test.php && wp plugin activate fp-cron-test >/dev/null 2>&1 && wp cron event schedule fp_cron_test now >/dev/null 2>&1'
+for _ in $(seq 1 20); do [ "$(docker exec $WP wp option get fp_cron_ran 2>/dev/null)" = yes ] && break; sleep 1; done
+check "cron runner runs due plugin events" yes "$(docker exec $WP wp option get fp_cron_ran 2>/dev/null)"
+check "cron runner logs the events it ran" 1 "$(docker logs $WP 2>&1 | grep -c "FrankenPress cron: Executed the cron event 'fp_cron_test'")"
+check "cron runner runs as the web user" www-data "$(docker exec $WP sh -c 'ps -eo user:12,args | grep "[c]ron.sh" | awk "{print \$1}" | sort -u')"
 
 # UMASK: $WP runs with UMASK=0002, $WP2 without
 umask_probe='<?php file_put_contents(__DIR__ . "/umask-web.txt", "x"); echo substr(sprintf("%o", fileperms(__DIR__ . "/umask-web.txt")), -3);'

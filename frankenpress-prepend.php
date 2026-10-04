@@ -10,9 +10,7 @@
  * Switches accept 1/true/yes/on (case-insensitive); anything else is off,
  * except DISALLOW_FILE_EDIT, CORE_UPGRADE_SKIP_NEW_BUNDLED,
  * DISALLOW_PLUGIN_THEME_INSTALL and DISABLE_APPLICATION_PASSWORDS, which are
- * on unless set to 0/false/no/off.
- * Don't also define DISABLE_WP_CRON in WORDPRESS_CONFIG_EXTRA, or PHP warns
- * that the constant is already defined.
+ * on unless set to 0/false/no/off, and DISABLE_WP_CRON, which follows CRON.
  */
 
 $frankenpress_enabled = static function (string $name): bool {
@@ -45,11 +43,24 @@ if (PHP_SAPI !== 'cli') {
     }
 }
 
-// Stop WordPress from running cron on page loads; use with a real scheduler,
-// e.g. `wp cron event run --due-now` every few minutes.
-if ($frankenpress_enabled('DISABLE_WP_CRON') && !defined('DISABLE_WP_CRON')) {
-    define('DISABLE_WP_CRON', true);
+// DISABLE_WP_CRON: page loads don't start wp-cron.php. It follows CRON (the
+// image's own cron runner, on by default; see frankenpress-cron.sh) unless
+// set explicitly: =1 for an external scheduler with CRON=0, =0 to keep
+// page-load cron next to the runner. Defined late like the settings below,
+// so a site's own define wins.
+$frankenpress_no_page_cron = $frankenpress_enabled('DISABLE_WP_CRON')
+    || (!$frankenpress_disabled('DISABLE_WP_CRON') && !$frankenpress_disabled('CRON'));
+if ($frankenpress_no_page_cron) {
+    $GLOBALS['wp_filter']['muplugins_loaded'][10][] = [
+        'function' => static function (): void {
+            if (!defined('DISABLE_WP_CRON')) {
+                define('DISABLE_WP_CRON', true);
+            }
+        },
+        'accepted_args' => 0,
+    ];
 }
+unset($frankenpress_no_page_cron);
 
 // Settings that are on by default; NAME=0 turns each off:
 // - DISALLOW_FILE_EDIT: no theme and plugin code editors in wp-admin, so a

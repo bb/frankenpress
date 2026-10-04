@@ -308,6 +308,9 @@ COPY --chmod=755 frankenpress-mariadb.sh /usr/local/share/frankenpress/mariadb.s
 RUN for t in mariadb mysql mariadb-dump mysqldump mariadb-check mariadb-import; do \
         ln -s /usr/local/share/frankenpress/mariadb.sh /usr/local/bin/$t; \
     done
+# WP-Cron runner, started by the entrypoint (CRON, on by default)
+COPY --chmod=755 frankenpress-cron.sh /usr/local/share/frankenpress/cron.sh
+COPY frankenpress-cron.php /usr/local/share/frankenpress/cron.php
 
 # -----------------------------------------------------------------------------
 # WordPress and Entrypoint Customization

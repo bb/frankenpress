@@ -104,6 +104,7 @@ There is no built-in page cache. Use a caching plugin, and Redis for the object 
 - `FIX_OWNERSHIP`: set to `1` and start the container as root (`--user root`, or `user: root` in compose) to repair ownership of mounted folders at startup. Useful when bind mounts or platforms like AWS ECS hand the container root-owned folders, so uploads or certificates can't be written. Files not owned by the web user in `/var/www/html`, `/data/caddy` and `/config/caddy` are chowned (symlinks themselves, never their targets), then the server drops to `www-data`. Without `FIX_OWNERSHIP`, the image runs as `www-data` as before. Images from 2026-10-02 called it `FIX_PERMISSIONS`; that name now stops the container with a message
 - `UMASK`: file creation mask, e.g. `0002` for group-writable files. Unset keeps `0022`. See [Sharing wp-content with another user](#sharing-wp-content-with-another-user)
 - `HSTS`: set to a `Strict-Transport-Security` value, e.g. `max-age=31536000`, to send HSTS on HTTPS requests (direct or forwarded by a trusted proxy). Off by default; add `; includeSubDomains` only if every subdomain serves HTTPS
+- `CRON`: on by default: the container runs WordPress's scheduled tasks itself, every `CRON_INTERVAL` seconds (default `60`), instead of on page loads. Set to `0` to turn it off. See [Scheduled Tasks](#scheduled-tasks-wp-cron)
 - `SUPERCACHE`: set to `1` to serve WP Super Cache's cached pages straight from disk, without PHP. See [Page Cache](#page-cache)
 - `BLOCK_XMLRPC`: set to `1` to refuse `xmlrpc.php` (403), a common password-guessing target. Off by default because Jetpack and the WordPress mobile apps still use it
 
@@ -119,13 +120,13 @@ The official image's entrypoint creates `wp-config.php` from these variables and
 - `WORDPRESS_DEBUG`: Turns on WordPress Debug.
 - `FORCE_HTTPS`: Set to `1` to tell WordPress every request is HTTPS. Usually not needed behind a load balancer that terminates TLS, since requests a trusted proxy forwards as HTTPS are detected automatically (see `TRUSTED_PROXIES`). Defaults to `0`.
 - `DISALLOW_FILE_EDIT`: on by default, so wp-admin has no theme and plugin code editors, and a stolen admin login can't be turned into running PHP through them. Set to `0` to bring the editors back. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value. Earlier images had it off unless set to `1`, which still works
-- `DISABLE_WP_CRON`: set to `1` to stop WordPress from running scheduled tasks on page loads, when you run them from a real scheduler instead, e.g. `wp cron event run --due-now` every few minutes
+- `DISABLE_WP_CRON`: stops WordPress from starting scheduled tasks on page loads. Follows `CRON`: on while the image's cron runner runs, off with `CRON=0`. Set it explicitly to override, e.g. `1` with `CRON=0` and your own scheduler. A site that defines the constant itself keeps its own value. See [Scheduled Tasks](#scheduled-tasks-wp-cron)
 - `CORE_UPGRADE_SKIP_NEW_BUNDLED`: on by default, so core updates don't install new default themes and plugins into `wp-content`. Set to `0` to turn it off. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value
 - `DISALLOW_PLUGIN_THEME_INSTALL`: on by default, so nobody can install or upload plugins and themes through wp-admin or the REST API, and a stolen admin session can't upload a plugin carrying a web shell. Updates (automatic and from wp-admin), activation and deletion still work. Install new plugins and themes with WP-CLI (`wp plugin install`), or set to `0` to allow it in wp-admin again
 - `DISABLE_APPLICATION_PASSWORDS`: on by default, so WordPress offers no application passwords, and a stolen admin session can't create a REST API password that outlives it. Existing application passwords stop working too. Set to `0` if an integration logs in with one
 - `WORDPRESS_CONFIG_EXTRA`: PHP added to `wp-config.php` when it's created, e.g. `define('WP_HOME', 'https://example.com');`
 
-`FORCE_HTTPS`, `DISALLOW_FILE_EDIT`, `DISABLE_WP_CRON`, `CORE_UPGRADE_SKIP_NEW_BUNDLED`, `DISALLOW_PLUGIN_THEME_INSTALL` and `DISABLE_APPLICATION_PASSWORDS` are applied on every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created. Don't also define `DISABLE_WP_CRON` in `WORDPRESS_CONFIG_EXTRA`.
+`FORCE_HTTPS`, `DISALLOW_FILE_EDIT`, `DISABLE_WP_CRON`, `CORE_UPGRADE_SKIP_NEW_BUNDLED`, `DISALLOW_PLUGIN_THEME_INSTALL` and `DISABLE_APPLICATION_PASSWORDS` are applied on every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created.
 
 ### WP-CLI
 
@@ -253,6 +254,20 @@ services:
 **At the limit**, the kernel first reclaims page cache. If that isn't enough, it kills FrankenPHP, and the container restarts (`restart: unless-stopped`). Requests in progress at that moment fail.
 
 **Image optimisation plugins** that process images locally (e.g. EWWW Image Optimizer) use every core for a single image through ImageMagick. A CPU limit makes them slower, not broken.
+
+## Scheduled Tasks (WP-Cron)
+
+WordPress runs its scheduled tasks (automatic updates, scheduled posts, plugin jobs, cleanups) only when a page request reaches PHP: it starts `wp-cron.php` in the background. Cached pages never reach PHP, so on a mostly cached site these tasks wait for an uncached visit, and security updates can wait for days.
+
+The image therefore runs them itself. While the server runs, the container runs `wp cron event run --due-now` every `CRON_INTERVAL` seconds (default `60`), as the web user, and logs every task it runs:
+
+    FrankenPress cron: Executed the cron event 'wp_version_check' in 0.517s.
+
+`DISABLE_WP_CRON` is set at the same time, so visitors no longer start `wp-cron.php`. With `CRON=0`, WordPress goes back to running tasks on page loads; to use your own scheduler instead, also set `DISABLE_WP_CRON=1`.
+
+- **Several containers, one database:** only one runs a site's tasks at a time, through a database lock (`GET_LOCK`), so tasks don't run twice. Other sites on the same database server aren't affected.
+- **Multisite:** the tasks of every active site run.
+- **Before the site is installed**, or while the database is unreachable, the runner waits silently.
 
 ## Page Cache
 
