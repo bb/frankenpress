@@ -8,8 +8,9 @@
  * created. Settings in this file therefore reach new and existing sites alike.
  *
  * Switches accept 1/true/yes/on (case-insensitive); anything else is off,
- * except DISALLOW_FILE_EDIT and CORE_UPGRADE_SKIP_NEW_BUNDLED, which are on
- * unless set to 0/false/no/off.
+ * except DISALLOW_FILE_EDIT, CORE_UPGRADE_SKIP_NEW_BUNDLED,
+ * DISALLOW_PLUGIN_THEME_INSTALL and DISABLE_APPLICATION_PASSWORDS, which are
+ * on unless set to 0/false/no/off.
  * Don't also define DISABLE_WP_CRON in WORDPRESS_CONFIG_EXTRA, or PHP warns
  * that the constant is already defined.
  */
@@ -77,6 +78,35 @@ foreach (['DISALLOW_FILE_EDIT', 'CORE_UPGRADE_SKIP_NEW_BUNDLED'] as $frankenpres
     }
 }
 unset($frankenpress_name);
+
+// Settings that are on by default and work through WordPress filters rather
+// than constants, registered the same way; NAME=0 turns each off:
+// - DISALLOW_PLUGIN_THEME_INSTALL: nobody can install or upload plugins and
+//   themes through wp-admin or the REST API, so a stolen admin session can't
+//   upload a plugin carrying a web shell. Updates (automatic and from
+//   wp-admin), activation and deletion still work, and so does
+//   `wp plugin install`, since WP-CLI doesn't check capabilities.
+// - DISABLE_APPLICATION_PASSWORDS: no application passwords, so a stolen
+//   admin session can't create a password for the REST API that outlives
+//   it. Existing application passwords stop working too.
+if (!$frankenpress_disabled('DISALLOW_PLUGIN_THEME_INSTALL')) {
+    $GLOBALS['wp_filter']['map_meta_cap'][10][] = [
+        'function' => static function ($caps, $cap) {
+            return in_array($cap, ['install_plugins', 'upload_plugins', 'install_themes', 'upload_themes'], true)
+                ? ['do_not_allow']
+                : $caps;
+        },
+        'accepted_args' => 2,
+    ];
+}
+if (!$frankenpress_disabled('DISABLE_APPLICATION_PASSWORDS')) {
+    $GLOBALS['wp_filter']['wp_is_application_passwords_available'][10][] = [
+        'function' => static function (): bool {
+            return false;
+        },
+        'accepted_args' => 0,
+    ];
+}
 
 // UMASK (e.g. 0002), for sites sharing wp-content with another user through
 // a common group. The entrypoint sets it for the server and everything it

@@ -143,6 +143,15 @@ docker exec $WP sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $dfe' > d
 check "DISALLOW_FILE_EDIT on by default (web)" true "$(curl -s $B/dfe.php)"
 check "DISALLOW_FILE_EDIT on by default (wp-cli)" true "$(docker exec $WP wp eval "$dfe" 2>/dev/null)"
 check "plugin editor refused by default" no "$(docker exec $WP wp eval 'wp_set_current_user(1); echo current_user_can("edit_plugins") ? "yes" : "no";' 2>/dev/null)"
+# DISALLOW_PLUGIN_THEME_INSTALL and DISABLE_APPLICATION_PASSWORDS: on by
+# default, =0 turns them off ($WP3 below). Capabilities as admin user 1;
+# application passwords need HTTPS, so ask through a trusted proxy.
+caps='wp_set_current_user(1); foreach (["install_plugins","upload_plugins","install_themes","upload_themes","update_plugins","activate_plugins","delete_plugins"] as $c) echo current_user_can($c) ? 1 : 0;'
+apw='echo wp_is_application_passwords_supported() ? "s" : "-", wp_is_application_passwords_available() ? "a" : "-";'
+docker exec $WP sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $caps' > caps.php; echo '<?php require __DIR__ . \"/wp-load.php\"; $apw' > apw.php"
+check "plugin/theme install+upload refused, update/activate/delete allowed (web)" 0000111 "$(curl -s $B/caps.php)"
+check "plugin/theme install+upload refused, update/activate/delete allowed (wp-cli)" 0000111 "$(docker exec $WP wp eval "$caps" 2>/dev/null)"
+check "application passwords off by default (HTTPS supported, not available)" s- "$(curl -s -H 'X-Forwarded-Proto: https' $B/apw.php)"
 # CORE_UPGRADE_SKIP_NEW_BUNDLED: on by default, a site's own define in
 # WORDPRESS_CONFIG_EXTRA wins without "Constant already defined" warnings,
 # and CORE_UPGRADE_SKIP_NEW_BUNDLED=0 without a define leaves it undefined
@@ -151,7 +160,7 @@ docker exec $WP sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $skip_bun
 check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (web)" true "$(curl -s $B/skip.php)"
 check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (wp-cli)" true "$(docker exec $WP wp eval "$skip_bundled" 2>/dev/null)"
 docker run -d --name $WP2 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e "WORDPRESS_CONFIG_EXTRA=define('CORE_UPGRADE_SKIP_NEW_BUNDLED', false); define('DISALLOW_FILE_EDIT', false);" "$IMG" >/dev/null
-docker run -d --name $WP3 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e CORE_UPGRADE_SKIP_NEW_BUNDLED=0 -e DISALLOW_FILE_EDIT=0 "$IMG" >/dev/null
+docker run -d --name $WP3 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e CORE_UPGRADE_SKIP_NEW_BUNDLED=0 -e DISALLOW_FILE_EDIT=0 -e DISALLOW_PLUGIN_THEME_INSTALL=0 -e DISABLE_APPLICATION_PASSWORDS=0 "$IMG" >/dev/null
 for c in $WP2 $WP3; do
   for _ in $(seq 1 30); do docker exec $c curl -s -o /dev/null http://127.0.0.1/healthz 2>/dev/null && break; sleep 1; done
 done
@@ -167,6 +176,9 @@ check "CORE_UPGRADE_SKIP_NEW_BUNDLED=0 turns it off (wp-cli)" undefined "$(docke
 docker exec $WP3 sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $dfe' > dfe.php"
 check "DISALLOW_FILE_EDIT=0 turns it off (web)" "'undefined'" "$(docker exec $WP3 curl -s http://127.0.0.1/dfe.php)"
 check "DISALLOW_FILE_EDIT=0 turns it off (wp-cli)" "'undefined'" "$(docker exec $WP3 wp eval "$dfe" 2>/dev/null)"
+docker exec $WP3 sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $caps' > caps.php; echo '<?php require __DIR__ . \"/wp-load.php\"; $apw' > apw.php"
+check "DISALLOW_PLUGIN_THEME_INSTALL=0 allows installs again" 1111111 "$(docker exec $WP3 curl -s http://127.0.0.1/caps.php)"
+check "DISABLE_APPLICATION_PASSWORDS=0 brings them back" sa "$(docker exec $WP3 curl -s -H 'X-Forwarded-Proto: https' http://127.0.0.1/apw.php)"
 docker rm -fv $WP3 >/dev/null
 
 # UMASK: $WP runs with UMASK=0002, $WP2 without
