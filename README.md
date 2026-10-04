@@ -121,9 +121,11 @@ The official image's entrypoint creates `wp-config.php` from these variables and
 - `DISALLOW_FILE_EDIT`: on by default, so wp-admin has no theme and plugin code editors, and a stolen admin login can't be turned into running PHP through them. Set to `0` to bring the editors back. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value. Earlier images had it off unless set to `1`, which still works
 - `DISABLE_WP_CRON`: set to `1` to stop WordPress from running scheduled tasks on page loads, when you run them from a real scheduler instead, e.g. `wp cron event run --due-now` every few minutes
 - `CORE_UPGRADE_SKIP_NEW_BUNDLED`: on by default, so core updates don't install new default themes and plugins into `wp-content`. Set to `0` to turn it off. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value
+- `DISALLOW_PLUGIN_THEME_INSTALL`: on by default, so nobody can install or upload plugins and themes through wp-admin or the REST API, and a stolen admin session can't upload a plugin carrying a web shell. Updates (automatic and from wp-admin), activation and deletion still work. Install new plugins and themes with WP-CLI (`wp plugin install`), or set to `0` to allow it in wp-admin again
+- `DISABLE_APPLICATION_PASSWORDS`: on by default, so WordPress offers no application passwords, and a stolen admin session can't create a REST API password that outlives it. Existing application passwords stop working too. Set to `0` if an integration logs in with one
 - `WORDPRESS_CONFIG_EXTRA`: PHP added to `wp-config.php` when it's created, e.g. `define('WP_HOME', 'https://example.com');`
 
-`FORCE_HTTPS`, `DISALLOW_FILE_EDIT`, `DISABLE_WP_CRON` and `CORE_UPGRADE_SKIP_NEW_BUNDLED` are applied on every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created. Don't also define `DISABLE_WP_CRON` in `WORDPRESS_CONFIG_EXTRA`.
+`FORCE_HTTPS`, `DISALLOW_FILE_EDIT`, `DISABLE_WP_CRON`, `CORE_UPGRADE_SKIP_NEW_BUNDLED`, `DISALLOW_PLUGIN_THEME_INSTALL` and `DISABLE_APPLICATION_PASSWORDS` are applied on every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created. Don't also define `DISABLE_WP_CRON` in `WORDPRESS_CONFIG_EXTRA`.
 
 ### WP-CLI
 
@@ -332,6 +334,7 @@ When building this repository yourself, `--build-arg WITH_GHOSTSCRIPT=0` leaves 
 ## Security Hardening
 
 - **No PHP from uploads:** `.php`, `.phtml`, `.phar` and similar files under `wp-content/uploads` return 404, so a vulnerable upload form can't become remote code execution.
+- **A stolen admin session goes less far:** no code editors (`DISALLOW_FILE_EDIT`), no plugin or theme uploads and installs (`DISALLOW_PLUGIN_THEME_INSTALL`) and no application passwords (`DISABLE_APPLICATION_PASSWORDS`), all on by default. Uploading a plugin with a web shell is how a stolen admin session usually becomes code execution on the server.
 - **No private files:** hidden files and folders (`.git`, `.env`, `.htaccess`, …) and backup or log files (`*.bak`, `*.sql`, `*.log`, …) return 404. `/.well-known/` is still served.
 - **Restricted image formats:** Imagick only handles GIF, JPEG, PNG, WebP, AVIF and HEIC, plus reading PDFs for thumbnails. PostScript, SVG and ImageMagick's other formats are refused, which keeps uploads away from rarely audited parsers. In the VIPS images, `VIPS_BLOCK_UNTRUSTED=1` likewise limits libvips to its well-audited loaders, so its PDF, SVG, ImageMagick, OpenEXR, JPEG XL and other rarely audited loaders are off (PDF thumbnails still come from Imagick). libvips blocks them whenever the variable is set, whatever its value, so `VIPS_BLOCK_UNTRUSTED=0` doesn't turn this off.
 - **Security headers:** `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options` are added unless WordPress already sent them; the `Server` header is removed. HSTS is available via `HSTS`.
