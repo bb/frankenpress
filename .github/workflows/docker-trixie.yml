@@ -99,13 +99,17 @@ jobs:
           flavor: |
             latest=false
 
-      - name: Build and push
+      # Every run builds into the local Docker daemon first and tests that
+      # image; the push further down only happens once the tests pass, so
+      # scheduled rebuilds (new Debian packages) are tested like PRs.
+      # Attestations need a registry push, so this build has none.
+      - name: Build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           platforms: ${{ matrix.platform }}
           context: .
           target: ${{ matrix.variant }}
-          push: ${{ github.event_name != 'pull_request' }}
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           # Each variant writes its own cache scope; vips-ffi also reads the standard
           # scope so the shared base layers are reused.
@@ -115,12 +119,9 @@ jobs:
             type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: ${{ github.event_name != 'pull_request' && 'mode=max' || 'false' }}
-          sbom: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
+          provenance: false
 
       - name: Smoke test
-        if: github.event_name == 'pull_request'
         env:
           IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
         run: |
@@ -150,8 +151,44 @@ jobs:
       # Full run against WordPress + MariaDB: hardening rules, proxy handling,
       # healthcheck and image processing (see tests/integration.sh)
       - name: Integration test
-        if: github.event_name == 'pull_request'
         run: tests/integration.sh "${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}" "${{ matrix.variant }}"
+
+      # Publish the tested image. This rebuild comes entirely from the cache
+      # the build above just filled (same builder, base images pinned by
+      # digest) and adds the provenance and SBOM attestations.
+      - name: Push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          platforms: ${{ matrix.platform }}
+          context: .
+          target: ${{ matrix.variant }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: |
+            type=gha,scope=${{ env.CACHE_SCOPE }}-standard
+            type=gha,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      # Make sure what went out is what was tested: the layers of the pushed
+      # image must match those of the local one.
+      - name: Verify the pushed image is the tested one
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+        run: |
+          set -euo pipefail
+          layers() { docker image inspect --format '{{json .RootFS.Layers}}' "$1"; }
+          tested=$(layers "$IMAGE")
+          for repo in "${{ env.DOCKERHUB_IMAGE }}" "ghcr.io/${{ github.repository_owner }}/frankenpress"; do
+            docker pull -q --platform "${{ matrix.platform }}" "$repo:$ARCH_TAG" >/dev/null
+            if [ "$(layers "$repo:$ARCH_TAG")" != "$tested" ]; then
+              echo "::error::$repo:$ARCH_TAG differs from the tested image"; exit 1
+            fi
+          done
+          echo "Pushed layers match the tested image"
 
       # Report-only: lists HIGH/CRITICAL vulnerabilities in the job summary and
       # never fails the build. Trivy runs from its official image pinned by
