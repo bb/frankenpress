@@ -288,7 +288,7 @@ Limits:
 
 ## Sharing wp-content with Another User
 
-Some sites share `wp-content` with another user, e.g. an agency's SFTP account that edits themes and plugins. Both sides then work through a common group, and WordPress has to create files group-writable (`664` files, `775` folders), or the other user can't change or delete what WordPress wrote.
+Some sites share `wp-content` with another user, e.g. an SFTP account that edits themes and plugins. Both sides then work through a common group, and WordPress has to create files group-writable (`664` files, `775` folders), or the other user can't change or delete what WordPress wrote.
 
 Put the other user in the web user's group (`www-data`, gid 33 inside the container), and make the folders group-owned and setgid, so new files keep that group. On the host (or as root in the container):
 
