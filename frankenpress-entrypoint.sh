@@ -74,6 +74,19 @@ if [[ "${1:-}" == frankenphp* ]]; then
     fi
 fi
 
+# WP-Cron runner (CRON, on by default; 0/false/no/off turns it off): runs
+# due events every CRON_INTERVAL seconds in the background, see
+# frankenpress-cron.sh. Only with the server, never for one-off commands.
+cron=0
+if [[ "${1:-}" == frankenphp* ]] && [[ ! "${CRON:-}" =~ ^(0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff])$ ]]; then
+    if [[ ! "${CRON_INTERVAL:-60}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "FrankenPress: invalid CRON_INTERVAL '${CRON_INTERVAL}'; use a number of seconds, e.g. 60" >&2
+        exit 1
+    fi
+    cron=1
+    echo "FrankenPress: WP-Cron runs every ${CRON_INTERVAL:-60}s in the container (CRON=0 turns it off)"
+fi
+
 if [ "$(id -u)" = 0 ] && [ "${FIX_OWNERSHIP:-0}" = 1 ]; then
     user="${FRANKENPRESS_USER:-www-data}"
     group="$(id -gn "$user")"
@@ -87,8 +100,15 @@ if [ "$(id -u)" = 0 ] && [ "${FIX_OWNERSHIP:-0}" = 1 ]; then
         find "$dir" \( ! -user "$user" -o ! -group "$group" \) -exec chown -h "$user:$group" {} +
     done
 
+    if [ "$cron" = 1 ]; then
+        setpriv --reuid="$user" --regid="$group" --init-groups -- \
+            /usr/local/share/frankenpress/cron.sh &
+    fi
     exec setpriv --reuid="$user" --regid="$group" --init-groups -- \
         /usr/local/bin/docker-entrypoint.sh "$@"
 fi
 
+if [ "$cron" = 1 ]; then
+    /usr/local/share/frankenpress/cron.sh &
+fi
 exec /usr/local/bin/docker-entrypoint.sh "$@"

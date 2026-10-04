@@ -31,6 +31,9 @@ services:
       CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
       # Theme and plugin code editors in wp-admin: off unless set to 0
       DISALLOW_FILE_EDIT: ${DISALLOW_FILE_EDIT:-}
+      # WordPress's scheduled tasks run in the container; 0: on page loads
+      # (see "Scheduled Tasks (WP-Cron)")
+      CRON: ${CRON:-}
       # 1: serve WP Super Cache's pages without PHP (see "Page Cache")
       SUPERCACHE: ${SUPERCACHE:-}
       # PHP threads: start with 4, add more under load, up to 8. Without
