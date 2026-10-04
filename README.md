@@ -268,6 +268,7 @@ The image therefore runs them itself. While the server runs, the container runs 
 - **Several containers, one database:** only one runs a site's tasks at a time, through a database lock (`GET_LOCK`), so tasks don't run twice. Other sites on the same database server aren't affected.
 - **Multisite:** the tasks of every active site run.
 - **Before the site is installed**, or while the database is unreachable, the runner waits silently.
+- **`wp-cron.php` is refused (403)** while the runner runs: WordPress no longer calls it, so any request comes from outside. It stays open with `CRON=0` or an explicit `DISABLE_WP_CRON=0`, for page-load cron or an external scheduler that calls it over HTTP. A site that only defines `DISABLE_WP_CRON` as `false` in its own config still runs its tasks through the runner; its page-load attempts get the 403.
 
 ## Page Cache
 
@@ -357,6 +358,7 @@ When building this repository yourself, `--build-arg WITH_GHOSTSCRIPT=0` leaves 
 - **Bounded requests:** slow clients time out, and oversized request bodies get 413 (see `TIMEOUT_*` and `REQUEST_BODY_MAX_BYTES`).
 - **Verified downloads:** WP-CLI and the VIPS plugin are pinned to releases and checked against their published checksums.
 - **Optional XML-RPC block:** `BLOCK_XMLRPC=1` refuses `xmlrpc.php`.
+- **No external cron triggers:** while the container runs WordPress's scheduled tasks itself (`CRON`, on by default), requests to `wp-cron.php` get 403, so nobody can trigger them from outside.
 - **Pinned base images:** every base image is pinned by digest; updates come in as Dependabot pull requests that CI tests first.
 - **Fewer libraries, fewer CVEs:** the published image has no compiler and none of ImageMagick's extra codec libraries (OpenEXR, DjVu, WMF, …).
 - **WordPress core is writable by the web server user:** dashboard updates need this. Existing sites keep the WordPress version in their `/var/www/html` volume and update through WordPress itself; pulling a newer image doesn't change it.

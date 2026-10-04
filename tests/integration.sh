@@ -184,6 +184,7 @@ check "DISALLOW_PLUGIN_THEME_INSTALL=0 allows installs again" 1111111 "$(docker 
 check "DISABLE_APPLICATION_PASSWORDS=0 brings them back" sa "$(docker exec $WP3 curl -s -H 'X-Forwarded-Proto: https' http://127.0.0.1/apw.php)"
 check "CRON=0: no cron runner" 0 "$(docker logs $WP3 2>&1 | grep -c 'FrankenPress: WP-Cron runs')"
 check "CRON=0: page loads run WP-Cron again (DISABLE_WP_CRON unset)" "'undefined'" "$(docker exec $WP3 wp eval "$dwc" 2>/dev/null)"
+check "CRON=0: wp-cron.php reachable" 200 "$(docker exec $WP3 curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/wp-cron.php)"
 docker rm -fv $WP3 >/dev/null
 
 # WP-Cron runner ($WP, CRON_INTERVAL=5): page loads don't run cron, the
@@ -198,6 +199,7 @@ add_action(\"fp_cron_test\", function () { update_option(\"fp_cron_ran\", \"yes\
 for _ in $(seq 1 20); do [ "$(docker exec $WP wp option get fp_cron_ran 2>/dev/null)" = yes ] && break; sleep 1; done
 check "cron runner runs due plugin events" yes "$(docker exec $WP wp option get fp_cron_ran 2>/dev/null)"
 check "cron runner logs the events it ran" 1 "$(docker logs $WP 2>&1 | grep -c "FrankenPress cron: Executed the cron event 'fp_cron_test'")"
+check "wp-cron.php refused while the runner runs" "403 403 403" "$(for p in /wp-cron.php '/wp-cron.php?doing_wp_cron=1' /wp-cron.php/x; do printf '%s ' "$(code "$p")"; done | sed 's/ $//')"
 check "cron runner runs as the web user" www-data "$(docker exec $WP sh -c 'ps -eo user:12,args | grep "[c]ron.sh" | awk "{print \$1}" | sort -u')"
 
 # UMASK: $WP runs with UMASK=0002, $WP2 without

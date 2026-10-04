@@ -87,6 +87,17 @@ http://127.0.0.1:2080 {
 	}
 	respond @xmlrpc 403
 
+	# wp-cron.php: while the image's cron runner runs (CRON, on by default),
+	# WordPress doesn't call it, so any request comes from outside: a client
+	# triggering WordPress's scheduled tasks at will. Refused, including the
+	# /wp-cron.php/extra path-info form. Left open with CRON=0 or an explicit
+	# DISABLE_WP_CRON=0, where page loads or an external scheduler use it.
+	@wpcron {
+		path_regexp wpcron (?i)/wp-cron\.php(/|$)
+		expression `!("{$CRON:}".lowerAscii() in ["0", "false", "no", "off"]) && !("{$DISABLE_WP_CRON:}".lowerAscii() in ["0", "false", "no", "off"])`
+	}
+	respond @wpcron 403
+
 	# /wp-json/... works on every site: without pretty permalinks WordPress
 	# only answers the REST API via ?rest_route=, so /wp-json/ would return
 	# the home page. Rewriting to the query form works with any permalink
