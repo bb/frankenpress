@@ -47,7 +47,7 @@ All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) fo
 
 The PHP extensions are compiled in a separate build stage on the official [FrankenPHP image](https://hub.docker.com/r/dunglas/frankenphp). The published image is Debian slim plus PHP, FrankenPHP and only the libraries they link against, with no compiler toolchain. That puts the standard image at about 615 MB and the VIPS image at about 680 MB.
 
-The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by digest in the `Dockerfile`, so every build uses exactly the images recorded in git. Dependabot opens a pull request when one of them changes, and CI runs the full integration test on it before it's merged. Debian package updates in the final image still arrive with every weekly rebuild.
+The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by digest in the `Dockerfile`, so every build uses exactly the images recorded in git. Dependabot opens a pull request when one of them changes, and CI runs the full integration test on it before it's merged. Debian package updates in the final image still arrive with every weekly rebuild. Every build, scheduled ones included, runs the same smoke and integration tests on both architectures, and is only pushed if they pass.
 
 ## Links
 
