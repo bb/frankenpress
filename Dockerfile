@@ -26,7 +26,7 @@
 # images recorded here, and a replaced tag upstream can't change it silently.
 # Dependabot (.github/dependabot.yml) opens a pull request when a tag points
 # at a new digest or a newer version tag appears; CI tests it before merging.
-# The tags below also select the versions: WordPress 7.1.2, FrankenPHP 1.x
+# The tags below also select the versions: WordPress 7.1.3, FrankenPHP 1.x
 # with PHP 8.5 on Debian 13 (Trixie).
 
 # -----------------------------------------------------------------------------
@@ -34,7 +34,7 @@
 # -----------------------------------------------------------------------------
 # Pull WordPress core files from the official WordPress Docker image
 # This stage is used only to extract files, not run WordPress
-FROM wordpress:7.1.2@sha256:e04cf657f24889e96b5544828cdd5a92a0b51819f3e1899183f9be6ea0485edf AS wp
+FROM wordpress:7.1.3@sha256:81a34254acaa6ff3b9a67268c2745e9a041c4094cbe5ccd35b75ed3bbdc033b5 AS wp
 
 # -----------------------------------------------------------------------------
 # Stage 2: PHP Build
