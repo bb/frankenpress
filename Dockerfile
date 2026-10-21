@@ -46,7 +46,7 @@ FROM wordpress:7.1.3@sha256:e4447d68aa14a2965d76a28d8276d8485d7f45904271dcff7746
 # into the final image.
 # Tag format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_CODENAME} (multi-arch)
 # See: https://hub.docker.com/r/dunglas/frankenphp
-FROM dunglas/frankenphp:1-php8.5-trixie@sha256:81231b570830952baa3e62db06707996a886ff0a61ca64c77d032c8a110e6bc1 AS php-build
+FROM dunglas/frankenphp:1-php8.5-trixie@sha256:55c63014b845d24c3986b72ce7fdd1bdbb3c9219a1ecdc37bf828c7f038e6f1a AS php-build
 
 # bash with pipefail, so a library without a Debian package fails the build
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
