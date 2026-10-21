@@ -34,7 +34,7 @@
 # -----------------------------------------------------------------------------
 # Pull WordPress core files from the official WordPress Docker image
 # This stage is used only to extract files, not run WordPress
-FROM wordpress:7.1.3@sha256:e4447d68aa14a2965d76a28d8276d8485d7f45904271dcff77466e8713882a47 AS wp
+FROM wordpress:7.1.3@sha256:f3e6835fa7d4a5b786615c24b67ec70816e06ebd517d31276bef423e49dfd126 AS wp
 
 # -----------------------------------------------------------------------------
 # Stage 2: PHP Build
