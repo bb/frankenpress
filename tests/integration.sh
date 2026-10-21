@@ -34,6 +34,7 @@ check "opcache.max_accelerated_files" 20000 "$(docker run --rm "$IMG" php -r 'ec
 check "memory_limit" 256M "$(docker run --rm "$IMG" php -r 'echo ini_get("memory_limit");')"
 check "real hostname uses ACME, not internal CA" "" "$(docker run --rm -e SERVER_NAME=example.com --entrypoint frankenphp "$IMG" adapt --config /etc/caddy/Caddyfile 2>/dev/null | grep -o '"module":"internal"')"
 check "max_input_vars" 5000 "$(docker run --rm "$IMG" php -r 'echo ini_get("max_input_vars");')"
+check "session.upload_progress disabled (PHP2Shell)" 0 "$(docker run --rm "$IMG" php -r 'echo ini_get("session.upload_progress.enabled");')"
 
 # PHP threads: two per available CPU, at most 4, unless FRANKENPHP_CONFIG
 # sets num_threads. Read from FrankenPHP's own startup log line.
