@@ -37,12 +37,13 @@ check "max_input_vars" 5000 "$(docker run --rm "$IMG" php -r 'echo ini_get("max_
 check "session.upload_progress disabled (PHP2Shell)" 0 "$(docker run --rm "$IMG" php -r 'echo ini_get("session.upload_progress.enabled");')"
 
 # PHP threads: two per available CPU, at most 4, unless FRANKENPHP_CONFIG
-# sets num_threads. Read from FrankenPHP's own startup log line.
+# sets num_threads. Read from FrankenPHP's own startup log line, which
+# reports num_threads as total_threads (no workers, so they are equal).
 threads() { # threads <docker run options...> -> "num_threads/max_threads"
   local c=$TH out=""
   docker run -d --name $c "$@" "$IMG" >/dev/null
   for _ in $(seq 1 30); do
-    out=$(docker logs $c 2>&1 | grep -o '"num_threads":[0-9]*,"max_threads":[0-9]*' | grep -oE '[0-9]+' | paste -sd/ -)
+    out=$(docker logs $c 2>&1 | grep -m1 'FrankenPHP started' | grep -oE '"(total|max)_threads":[0-9]+' | grep -oE '[0-9]+$' | paste -sd/ -)
     [ -n "$out" ] && break; sleep 1
   done
   docker rm -f $c >/dev/null; echo "$out"
