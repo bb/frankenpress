@@ -140,7 +140,8 @@ check "?rest_route= still selects a REST route" yes "$(curl -s "$B/?rest_route=/
 batch() { curl -s -o /dev/null -w '%{http_code}' -X POST "$@" -F 'requests[0][method]=POST' -F 'requests[0][path]=/wp/v2/posts' "$B/"; }
 check "rest_route in a multipart body reaches no REST route" 200 "$(batch -F 'rest_route=/batch/v1')"
 check "rest_route in a form body reaches no REST route" 200 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d 'rest_route=/batch/v1' "$B/")"
-check "body rest_route can't override the query string" yes "$(curl -s -X POST -d 'rest_route=/batch/v1' "$B/?rest_route=/" | grep -q '"namespaces"' && echo yes || echo no)"
+# Without the fix WordPress would stop with 400 "variable mismatch"
+check "body rest_route can't override the query string" 401 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d 'rest_route=/batch/v1' "$B/?rest_route=/wp/v2/posts")"
 docker exec $WP wp rewrite structure '/%postname%/' >/dev/null 2>&1
 check "/wp-json/ with pretty permalinks" yes "$(curl -s $B/wp-json/ | grep -q '"namespaces"' && echo yes || echo no)"
 
