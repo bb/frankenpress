@@ -136,6 +136,11 @@ docker exec $WP wp rewrite structure '' >/dev/null 2>&1
 check "/wp-json/ is the REST index (plain permalinks)" yes "$(curl -s $B/wp-json/ | grep -q '"namespaces"' && echo yes || echo no)"
 check "/wp-json/wp/v2/posts?per_page=1 returns one post" 1 "$(curl -s "$B/wp-json/wp/v2/posts?per_page=1" | jq length 2>/dev/null)"
 check "POST /wp-json/ keeps method (401 unauthenticated)" 401 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d 'title=x' $B/wp-json/wp/v2/posts)"
+check "?rest_route= still selects a REST route" yes "$(curl -s "$B/?rest_route=/" | grep -q '"namespaces"' && echo yes || echo no)"
+batch() { curl -s -o /dev/null -w '%{http_code}' -X POST "$@" -F 'requests[0][method]=POST' -F 'requests[0][path]=/wp/v2/posts' "$B/"; }
+check "rest_route in a multipart body reaches no REST route" 200 "$(batch -F 'rest_route=/batch/v1')"
+check "rest_route in a form body reaches no REST route" 200 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d 'rest_route=/batch/v1' "$B/")"
+check "body rest_route can't override the query string" yes "$(curl -s -X POST -d 'rest_route=/batch/v1' "$B/?rest_route=/" | grep -q '"namespaces"' && echo yes || echo no)"
 docker exec $WP wp rewrite structure '/%postname%/' >/dev/null 2>&1
 check "/wp-json/ with pretty permalinks" yes "$(curl -s $B/wp-json/ | grep -q '"namespaces"' && echo yes || echo no)"
 

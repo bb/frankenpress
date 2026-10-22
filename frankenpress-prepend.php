@@ -36,6 +36,14 @@ if (PHP_SAPI !== 'cli') {
     // never legitimate now, so drop any client-sent copy.
     unset($_SERVER['HTTP_X_FRANKENPRESS_HTTPS']);
 
+    // WordPress reads its query variables from the POST body too, and prefers
+    // the body over the query string. A `rest_route` form field on any URL
+    // (POST / with rest_route=/batch/v1) therefore reaches the REST API
+    // without /wp-json/ or ?rest_route= ever appearing in the URL, past every
+    // path rule in a proxy in front. REST clients put the route in the URL,
+    // so only the query string (or /wp-json/) selects a route.
+    unset($_POST['rest_route'], $_REQUEST['rest_route']);
+
     // HTTPS: forced via FORCE_HTTPS, or decided by Caddy when a trusted proxy
     // forwarded the request as HTTPS
     if ($frankenpress_enabled('FORCE_HTTPS') || ($_SERVER['FRANKENPRESS_HTTPS'] ?? '') === 'on') {
