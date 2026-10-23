@@ -12,7 +12,11 @@ on:
       - 'frankenpress-entrypoint.sh'
       - 'frankenpress-prepend.php'
       - 'frankenpress-sendmail.sh'
+      - 'frankenpress-mariadb.sh'
+      - 'frankenpress-cron.sh'
+      - 'frankenpress-cron.php'
       - 'wp-cli.yml'
+      - '.dockerignore'
       - 'tests/**'
       - '.github/workflows/docker-trixie.yml'
   # Every pull request builds and tests, without a paths filter: main
@@ -136,16 +140,31 @@ jobs:
             echo "::error::PHP startup produced warnings"; exit 1
           fi
 
-          run php -m | grep -qx 'Zend OPcache'
-          run frankenphp version
+          # Output is captured before matching: piping into "grep -q" lets grep
+          # exit at the first match, and the writer's SIGPIPE then fails the
+          # step under pipefail.
+          modules=$(run php -m)
+          grep -qx 'Zend OPcache' <<<"$modules"
+
+          # Security floor: PHP2Shell (CVE-2026-109618/109619) and the
+          # FrankenPHP advisories fixed in 1.13.2. Fails closed when a version
+          # can't be parsed. Raise these after the next security release.
+          at_least() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
+          fp=$(run frankenphp version)
+          echo "$fp"
+          fp_version=$(sed -nE 's/^FrankenPHP v([0-9.]+) .*/\1/p' <<<"$fp")
+          php_version=$(run php -r 'echo PHP_VERSION;')
+          at_least "$fp_version" 1.13.2 || { echo "::error::FrankenPHP '$fp_version' is older than 1.13.2"; exit 1; }
+          at_least "$php_version" 8.5.12 || { echo "::error::PHP '$php_version' is older than 8.5.12"; exit 1; }
+
           run wp --version
-          run ls -la /usr/src/wordpress | grep wp-config-docker.php
+          grep -qx wp-config-docker.php <<<"$(run ls /usr/src/wordpress)"
 
           if [ "${{ matrix.variant }}" = vips-ffi ]; then
-            run php -m | grep -qx FFI
-            run dpkg -l | grep libvips
-            run ls /usr/src/wordpress/wp-content/plugins | grep vips-image-editor-ffi
-            run printenv VIPS_BLOCK_UNTRUSTED | grep -qx 1
+            grep -qx FFI <<<"$modules"
+            grep -q libvips <<<"$(run dpkg -l)"
+            grep -qx vips-image-editor-ffi <<<"$(run ls /usr/src/wordpress/wp-content/plugins)"
+            grep -qx 1 <<<"$(run printenv VIPS_BLOCK_UNTRUSTED)"
           fi
 
       # Full run against WordPress + MariaDB: hardening rules, proxy handling,

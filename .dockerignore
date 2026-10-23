@@ -1,0 +1,15 @@
+# The Dockerfile copies named files only; everything here just keeps the build
+# context small and keeps local state out of it, should a broader COPY appear.
+.git
+.github
+graft
+tests
+examples
+*.md
+
+# Local state and secrets
+**/.env
+**/.env.*
+!**/.env.example
+.tmp
+.air.toml

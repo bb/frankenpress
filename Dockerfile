@@ -322,11 +322,16 @@ COPY frankenpress-cron.php /usr/local/share/frankenpress/cron.php
 # HTTPS detection and the DISALLOW_FILE_EDIT/DISABLE_WP_CRON switches live in
 # frankenpress-prepend.php instead, so they also reach existing sites, whose
 # wp-config.php the entrypoint never rewrites.
+# The upstream wording changes over time, so each patch is checked and an
+# expression that no longer matches fails the build instead of leaving
+# WordPress uncopied.
 RUN sed -i \
-        -e 's/\[ "$1" = '\''php-fpm'\'' \]/\[\[ "$1" == frankenphp* \]\]/g' \
+        -e 's/\[ "${1-}" = '\''php-fpm'\'' \]/\[\[ "${1-}" == frankenphp* \]\]/g' \
         -e 's/php-fpm/frankenphp/g' \
         /usr/local/bin/docker-entrypoint.sh \
-    && sed -i 's/<?php/<?php define( "FS_METHOD", "direct" ); set_time_limit(300); /g' /usr/src/wordpress/wp-config-docker.php
+    && grep -qF '[[ "${1-}" == frankenphp* ]]' /usr/local/bin/docker-entrypoint.sh \
+    && sed -i 's/<?php/<?php define( "FS_METHOD", "direct" ); set_time_limit(300); /g' /usr/src/wordpress/wp-config-docker.php \
+    && grep -qF 'define( "FS_METHOD", "direct" )' /usr/src/wordpress/wp-config-docker.php
 
 # -----------------------------------------------------------------------------
 # Custom Configuration Files
