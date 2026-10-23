@@ -12,7 +12,7 @@ fail=0
 check() { # check <description> <expected> <actual>
   if [ "$2" = "$3" ]; then printf "  ok    %-52s %s\n" "$1" "$3"; else printf "  FAIL  %-52s expected=%s got=%s\n" "$1" "$2" "$3"; fail=1; fi
 }
-cleanup() { docker rm -fv $WP $WP2 $WP3 $TH $DB $DBOLD $MAIL >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
+cleanup() { docker rm -fv $WP $WP2 $WP3 $TH $DB $DBOLD $MAIL fpbundled-$$ >/dev/null 2>&1; docker volume rm fpbundled-$$ >/dev/null 2>&1; docker network rm $NET >/dev/null 2>&1; }
 trap cleanup EXIT
 
 echo "=== $IMG ($VARIANT)"
@@ -349,6 +349,22 @@ for _ in $(seq 1 30); do curl -s -o /dev/null "http://localhost:$((PORT + 1))/he
 check "explicit REQUEST_BODY_MAX_BYTES wins" "yes 413" "$(passes 2048) $(post 8192)"
 docker rm -fv $LIM >/dev/null
 check "invalid UMASK stops the container with a message" "FrankenPress: invalid UMASK 'abc'" "$(docker run --rm -e UMASK=abc "$IMG" 2>&1 | grep -o "FrankenPress: invalid UMASK 'abc'")"
+
+# Bundled plugins and themes: a new site gets them; an existing wp-content
+# (here a volume with one theme) mounted onto a fresh core volume doesn't,
+# unless CORE_UPGRADE_SKIP_NEW_BUNDLED=0
+check "new site gets the bundled plugins and themes" "yes yes yes" "$(docker exec $WP sh -c 'for p in plugins/akismet plugins/hello.php themes/twentytwentyfive; do [ -e wp-content/$p ] && echo yes || echo no; done' | tr '\n' ' ' | sed 's/ $//')"
+BUN=fpbundled-$$
+bundled() { # bundled [docker run options]: which bundled items a fresh core volume adds
+  docker volume create $BUN >/dev/null
+  docker run --rm -u 0 -v $BUN:/w --entrypoint sh "$IMG" -c 'mkdir -p /w/plugins /w/themes/mine && echo "/* Theme Name: Mine */" > /w/themes/mine/style.css && chown -R 33:33 /w'
+  docker run -d --name $BUN -v $BUN:/var/www/html/wp-content "$@" "$IMG" >/dev/null
+  for _ in $(seq 1 30); do docker exec $BUN test -e /var/www/html/wp-includes/version.php 2>/dev/null && break; sleep 1; done
+  echo "$(docker exec $BUN sh -c 'ls wp-content/plugins wp-content/themes | grep -cE "^(akismet|hello.php|twentytwenty)"') $(docker logs $BUN 2>&1 | grep -c 'not copying the bundled ones')"
+  docker rm -fv $BUN >/dev/null; docker volume rm $BUN >/dev/null
+}
+check "existing wp-content: bundled plugins and themes not copied" "0 1" "$(bundled)"
+check "CORE_UPGRADE_SKIP_NEW_BUNDLED=0 copies them again" "5 0" "$(bundled -e CORE_UPGRADE_SKIP_NEW_BUNDLED=0)"
 
 errs=$(docker logs $WP 2>&1 | grep -E '"level":"error"|PHP (Fatal|Warning|Parse)' | grep -v 'install root certificate' | head -3)
 check "no errors in container log" "" "$errs"

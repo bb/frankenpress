@@ -12,6 +12,7 @@ on:
       - 'frankenpress-entrypoint.sh'
       - 'frankenpress-prepend.php'
       - 'frankenpress-sendmail.sh'
+      - 'frankenpress-bundled.sh'
       - 'frankenpress-mariadb.sh'
       - 'frankenpress-cron.sh'
       - 'frankenpress-cron.php'

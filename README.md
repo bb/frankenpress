@@ -146,7 +146,7 @@ The official image's entrypoint creates `wp-config.php` from these variables and
 - `FORCE_HTTPS`: Set to `1` to tell WordPress every request is HTTPS. Usually not needed behind a load balancer that terminates TLS, since requests a trusted proxy forwards as HTTPS are detected automatically (see `TRUSTED_PROXIES`). Defaults to `0`.
 - `DISALLOW_FILE_EDIT`: on by default, so wp-admin has no theme and plugin code editors, and a stolen admin login can't be turned into running PHP through them. Set to `0` to bring the editors back. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value. Earlier images had it off unless set to `1`, which still works
 - `DISABLE_WP_CRON`: stops WordPress from starting scheduled tasks on page loads. Follows `CRON`: on while the image's cron runner runs, off with `CRON=0`. Set it explicitly to override, e.g. `1` with `CRON=0` and your own scheduler. A site that defines the constant itself keeps its own value. See [Scheduled Tasks](#scheduled-tasks-wp-cron)
-- `CORE_UPGRADE_SKIP_NEW_BUNDLED`: on by default, so core updates don't install new default themes and plugins into `wp-content`. Set to `0` to turn it off. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value
+- `CORE_UPGRADE_SKIP_NEW_BUNDLED`: on by default, so core updates don't install new default themes and plugins into `wp-content`, and a fresh core volume doesn't copy them into a `wp-content` that already has plugins or themes (see [Upgrading and Migrating](#upgrading-and-migrating)). Set to `0` to turn it off. A site that defines the constant itself, e.g. in `WORDPRESS_CONFIG_EXTRA`, keeps its own value
 - `DISALLOW_PLUGIN_THEME_INSTALL`: on by default, so nobody can install or upload plugins and themes through wp-admin or the REST API, and a stolen admin session can't upload a plugin carrying a web shell. Updates (automatic and from wp-admin), activation and deletion still work. Install new plugins and themes with WP-CLI (`wp plugin install`), or set to `0` to allow it in wp-admin again
 - `DISABLE_APPLICATION_PASSWORDS`: on by default, so WordPress offers no application passwords, and a stolen admin session can't create a REST API password that outlives it. Existing application passwords stop working too. Set to `0` if an integration logs in with one
 - `WORDPRESS_CONFIG_EXTRA`: PHP added to `wp-config.php` when it's created, e.g. `define('WP_HOME', 'https://example.com');`
@@ -347,7 +347,7 @@ Then check that `/var/www/html` is a volume, not the old bind mount:
 
     docker inspect --format '{{range .Mounts}}{{.Type}} {{.Destination}}{{println}}{{end}}' <container>
 
-A fresh core volume copies WordPress's bundled extras (Akismet, Hello Dolly, the default themes) into `wp-content`. You can delete the ones you don't use.
+A fresh core volume copies WordPress's bundled extras (Akismet, Hello Dolly, the default themes) into `wp-content` only for a new site. When `wp-content` already has plugins or themes, e.g. a bind mount or a separate volume, they're left out, so extras you deleted don't come back whenever the core volume is recreated. `CORE_UPGRADE_SKIP_NEW_BUNDLED=0` copies the missing ones again.
 
 ### MariaDB
 

@@ -318,6 +318,9 @@ COPY --chmod=755 frankenpress-mariadb.sh /usr/local/share/frankenpress/mariadb.s
 RUN for t in mariadb mysql mariadb-dump mysqldump mariadb-check mariadb-import; do \
         ln -s /usr/local/share/frankenpress/mariadb.sh /usr/local/bin/$t; \
     done
+# Keeps a fresh core volume from copying bundled plugins and themes into an
+# existing site's wp-content (sourced by docker-entrypoint.sh, see below)
+COPY frankenpress-bundled.sh /usr/local/share/frankenpress/bundled.sh
 # WP-Cron runner, started by the entrypoint (CRON, on by default)
 COPY --chmod=755 frankenpress-cron.sh /usr/local/share/frankenpress/cron.sh
 COPY frankenpress-cron.php /usr/local/share/frankenpress/cron.php
@@ -332,14 +335,19 @@ COPY frankenpress-cron.php /usr/local/share/frankenpress/cron.php
 # HTTPS detection and the DISALLOW_FILE_EDIT/DISABLE_WP_CRON switches live in
 # frankenpress-prepend.php instead, so they also reach existing sites, whose
 # wp-config.php the entrypoint never rewrites.
+# Before the core copy, the entrypoint sources frankenpress-bundled.sh, which
+# leaves out the bundled plugins and themes for an existing wp-content.
 # The upstream wording changes over time, so each patch is checked and an
 # expression that no longer matches fails the build instead of leaving
 # WordPress uncopied.
 RUN sed -i \
         -e 's/\[ "${1-}" = '\''php-fpm'\'' \]/\[\[ "${1-}" == frankenphp* \]\]/g' \
         -e 's/php-fpm/frankenphp/g' \
+        -e 's#^\(\t*\)tar "${sourceTarArgs\[@\]}" \. | tar "${targetTarArgs\[@\]}"$#\1. /usr/local/share/frankenpress/bundled.sh\n&#' \
         /usr/local/bin/docker-entrypoint.sh \
     && grep -qF '[[ "${1-}" == frankenphp* ]]' /usr/local/bin/docker-entrypoint.sh \
+    && grep -A1 -F '. /usr/local/share/frankenpress/bundled.sh' /usr/local/bin/docker-entrypoint.sh \
+        | grep -qF 'tar "${sourceTarArgs[@]}" . | tar "${targetTarArgs[@]}"' \
     && sed -i 's/<?php/<?php define( "FS_METHOD", "direct" ); set_time_limit(300); /g' /usr/src/wordpress/wp-config-docker.php \
     && grep -qF 'define( "FS_METHOD", "direct" )' /usr/src/wordpress/wp-config-docker.php
 
