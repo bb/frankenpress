@@ -67,6 +67,13 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 #
 # OPcache is not installed here: it is built into PHP 8.5 and always present.
 #
+# The PECL extensions are pinned (name-version), so a rebuild doesn't pick up
+# an untested release; the bundled ones come with PHP itself. The weekly
+# .github/workflows/pecl-updates.yml run opens an issue when PECL has a
+# different version. igbinary is pinned to a release candidate on purpose:
+# 3.2.16 doesn't compile on PHP 8.5, and 3.2.17RC1 is the release that adds
+# PHP 8.5 support (PECL lists it as stable).
+#
 # Afterwards, every shared library the PHP and FrankenPHP binaries link
 # against is mapped to its Debian package, so the final stage can install
 # exactly those (written to /runtime-packages.txt), and files only needed for
@@ -82,12 +89,12 @@ RUN install-php-extensions \
         intl \
         mysqli \
         zip \
-        imagick \
-        memcached \
-        apcu \
-        redis \
-        igbinary \
-        msgpack \
+        imagick-3.8.1 \
+        memcached-3.4.0 \
+        apcu-5.1.28 \
+        redis-6.3.0 \
+        igbinary-3.2.17RC1 \
+        msgpack-3.0.1 \
         ffi \
     && rm -f "$PHP_INI_DIR/conf.d/docker-php-ext-ffi.ini" \
     && find /usr/local -type f \( -name '*.so' -o -name '*.so.*' -o -perm -u+x \) -print0 \
