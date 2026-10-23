@@ -1,0 +1,64 @@
+name: PECL extension updates
+
+# The PECL extensions in the Dockerfile are pinned (install-php-extensions
+# name-version). Dependabot can't read PECL, so this job compares each pin
+# with the version PECL currently lists as stable and keeps one issue open
+# while they differ; it closes the issue once the pins are current.
+#
+# It opens an issue rather than a pull request: a pull request created with
+# GITHUB_TOKEN doesn't trigger the build workflow, so its required checks
+# would never run.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Every Monday at 6 AM UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    if: github.repository == 'bb/frankenpress'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare pins with PECL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="PECL extension updates available"
+
+          # Pinned entries of the install-php-extensions list, e.g. "imagick-3.8.1 \"
+          pins=$(sed -nE 's/^ +([a-z0-9_]+)-([0-9][0-9A-Za-z.]*) \\$/\1 \2/p' Dockerfile)
+          [ -n "$pins" ] || { echo "::error::no pinned extensions found in the Dockerfile"; exit 1; }
+
+          # Any difference is reported, not only a higher version: version
+          # sorting puts 3.2.17 before 3.2.17RC1.
+          updates=""
+          while read -r name pinned; do
+            stable=$(curl -fsS --retry 3 "https://pecl.php.net/rest/r/${name}/stable.txt")
+            echo "$name: pinned $pinned, PECL stable $stable"
+            if [ "$stable" != "$pinned" ]; then
+              updates+="- [ ] \`${name}\`: ${pinned} → ${stable} ([changelog](https://pecl.php.net/package-changelog.php?package=${name}))"$'\n'
+            fi
+          done <<<"$pins"
+
+          issue=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+
+          if [ -z "$updates" ]; then
+            echo "All pins are current."
+            [ -z "$issue" ] || gh issue close "$issue" --comment "All PECL pins in the Dockerfile are current."
+            exit 0
+          fi
+
+          body="PECL lists different versions than the pins in the Dockerfile:"$'\n\n'"$updates"$'\n'"Update the \`name-version\` entries in the \`install-php-extensions\` list; the pull request runs the build and integration test. Check the changelog for PHP 8.5 support before moving off a pin that exists for compatibility (see the comment above the list)."$'\n\n'"_Updated by the [PECL extension updates](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/pecl-updates.yml) workflow._"
+          if [ -n "$issue" ]; then
+            gh issue edit "$issue" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
