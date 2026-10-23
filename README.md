@@ -95,7 +95,7 @@ There is no built-in page cache. Use a caching plugin, and Redis for the object 
 
 - `SERVER_NAME`: the addresses to listen on. Defaults to `:80`: plain HTTP for any hostname, which is what a container behind a load balancer or reverse proxy needs. For HTTPS, set your hostname(s), e.g. `example.com` or `example.com, :80`; real hostnames get a publicly trusted certificate (Let's Encrypt/ZeroSSL) automatically, `localhost` and IP addresses use Caddy's local CA
 - `TIMEOUT_READ_HEADER`, `TIMEOUT_READ_BODY`, `TIMEOUT_WRITE`, `TIMEOUT_IDLE`: how long a client may take to send its headers (default `10s`) and body (`10m`), how long PHP plus sending the response may take (`10m`), and how long idle keep-alive connections stay open (`5m`). Bounds slow or stalled clients, which would otherwise hold PHP threads
-- `REQUEST_BODY_MAX_BYTES`: requests announcing a larger body get 413 before PHP starts on them. Defaults to `536870912` (512 MiB, matching `upload_max_filesize`/`post_max_size`); raise it together with those PHP settings
+- `REQUEST_BODY_MAX_BYTES`: requests announcing a larger body get 413 before PHP starts on them. Follows PHP's `post_max_size` (512 MiB by default), so it only needs setting to diverge from it. See [PHP](#php)
 - `CADDY_GLOBAL_OPTIONS`: inserted into Caddy's global options block, e.g. `email admin@example.com` for the Let's Encrypt account or `debug`
 - `CADDY_SERVER_EXTRA_DIRECTIVES`: inserted into the site block, before WordPress handles the request, e.g. `header /wp-content/uploads/* Cache-Control "public, max-age=31536000, immutable"`
 - `CADDY_EXTRA_CONFIG`: inserted at the top level of the Caddyfile, e.g. an extra site block. See [Custom Caddy Configuration](#custom-caddy-configuration)
@@ -107,6 +107,23 @@ There is no built-in page cache. Use a caching plugin, and Redis for the object 
 - `CRON`: on by default: the container runs WordPress's scheduled tasks itself, every `CRON_INTERVAL` seconds (default `60`), instead of on page loads. Set to `0` to turn it off. See [Scheduled Tasks](#scheduled-tasks-wp-cron)
 - `SUPERCACHE`: set to `1` to serve WP Super Cache's cached pages straight from disk, without PHP. See [Page Cache](#page-cache)
 - `BLOCK_XMLRPC`: set to `1` to refuse `xmlrpc.php` (403), a common password-guessing target. Off by default because Jetpack and the WordPress mobile apps still use it
+
+#### PHP
+
+- `UPLOAD_MAX_SIZE`: the largest upload, e.g. `1G` or `64M`. Sets `upload_max_filesize` and `post_max_size`, and Caddy's request body limit follows. Defaults to `512M`. Very large uploads over slow connections may also need a longer `TIMEOUT_READ_BODY` (default `10m`)
+- `PHP_INI`: any php.ini settings, one per line, applied after the image's own, e.g. for OPcache or `memory_limit`. They apply to the web server and to `wp` commands. A misspelled setting name, a syntax error or an invalid value stops the container with a message instead of being ignored:
+
+  ```yaml
+  services:
+    wordpress:
+      environment:
+        UPLOAD_MAX_SIZE: 1G
+        PHP_INI: |
+          memory_limit = 512M
+          opcache.memory_consumption = 512
+  ```
+
+  `PHP_INI` is written to a file in the container at startup, so it needs a writable root filesystem. Mounting a single `.ini` file into `/usr/local/etc/php/conf.d` also works (not a whole folder: that would hide the extensions' `.ini` files); Caddy's request body limit follows a `post_max_size` set there, too
 
 #### WordPress
 

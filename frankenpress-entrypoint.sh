@@ -30,6 +30,45 @@ if [ -n "${UMASK:-}" ]; then
     umask "$UMASK"
 fi
 
+# PHP_INI: php.ini lines from the environment, written to the file PHP reads
+# last, so they win over the image's settings. The file persists for the
+# container's life, so `docker exec … wp` sees them too. PHP reports syntax
+# errors and invalid values but ignores unknown setting names, so those are
+# checked here: a typo stops the container instead of silently not applying.
+ini_file="$PHP_INI_DIR/conf.d/zz-frankenpress-env.ini"
+if [ -w "$ini_file" ]; then
+    printf '%s\n' "${PHP_INI:-}" >"$ini_file"
+elif [ -n "${PHP_INI:-}" ]; then
+    echo "FrankenPress: can't write PHP_INI to $ini_file; is the container running as a user other than ${FRANKENPRESS_USER:-www-data}, or with a read-only filesystem?" >&2
+    exit 1
+fi
+if [ -n "${PHP_INI:-}${UPLOAD_MAX_SIZE:-}" ]; then
+    names=$(sed -nE 's/^[[:space:]]*([A-Za-z0-9_.]+)[[:space:]]*=.*/\1/p' <<<"${PHP_INI:-}" | grep -vxE 'extension|zend_extension' || true)
+    # shellcheck disable=SC2086 # names only contain [A-Za-z0-9_.]
+    problems=$(php -r 'foreach (array_slice($argv, 1) as $n) if (ini_get($n) === false) echo "unknown PHP setting \"$n\"\n";' -- $names 2>&1)
+    if [ -n "$problems" ]; then
+        echo "FrankenPress: PHP_INI or UPLOAD_MAX_SIZE isn't valid:" >&2
+        echo "$problems" >&2
+        exit 1
+    fi
+fi
+
+# Caddy refuses larger request bodies before PHP sees them. Unless
+# REQUEST_BODY_MAX_BYTES is set, follow PHP's effective post_max_size, so
+# raising it (UPLOAD_MAX_SIZE, PHP_INI or a mounted .ini) doesn't leave a
+# 413 from Caddy in the way. post_max_size 0 means no limit.
+if [[ "${1:-}" == frankenphp* ]] && [ -z "${REQUEST_BODY_MAX_BYTES:-}" ]; then
+    limits=$(php -r 'echo ini_parse_quantity(ini_get("post_max_size")), " ", ini_get("post_max_size"), " ", ini_get("upload_max_filesize");' 2>/dev/null || true)
+    read -r bytes post upload <<<"$limits"
+    if [[ "${bytes:-}" =~ ^[0-9]+$ ]]; then
+        [ "$bytes" -gt 0 ] || bytes=9223372036854775807
+        export REQUEST_BODY_MAX_BYTES=$bytes
+        if [ "$bytes" != 536870912 ]; then
+            echo "FrankenPress: uploads up to $upload, request bodies up to $post (upload_max_filesize, post_max_size)"
+        fi
+    fi
+fi
+
 # PHP threads: FrankenPHP starts two per CPU it sees, e.g. 64 on an
 # unlimited 32-thread host, each allowed memory_limit. Default to two per
 # available CPU (CPU limit or cpuset), but at most 4. num_threads in

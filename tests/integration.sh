@@ -35,6 +35,14 @@ check "memory_limit" 256M "$(docker run --rm "$IMG" php -r 'echo ini_get("memory
 check "real hostname uses ACME, not internal CA" "" "$(docker run --rm -e SERVER_NAME=example.com --entrypoint frankenphp "$IMG" adapt --config /etc/caddy/Caddyfile 2>/dev/null | grep -o '"module":"internal"')"
 check "max_input_vars" 5000 "$(docker run --rm "$IMG" php -r 'echo ini_get("max_input_vars");')"
 check "session.upload_progress disabled (PHP2Shell)" 0 "$(docker run --rm "$IMG" php -r 'echo ini_get("session.upload_progress.enabled");')"
+check "upload limits default to 512M" "512M 512M" "$(docker run --rm "$IMG" php -r 'echo ini_get("upload_max_filesize"), " ", ini_get("post_max_size");')"
+check "UPLOAD_MAX_SIZE sets both upload limits" "1G 1G" "$(docker run --rm -e UPLOAD_MAX_SIZE=1G "$IMG" php -r 'echo ini_get("upload_max_filesize"), " ", ini_get("post_max_size");')"
+check "PHP_INI applies, with sections and opcache" "1G 512" "$(docker run --rm -e PHP_INI=$'memory_limit = 1G\n[opcache]\nopcache.memory_consumption = 512' "$IMG" php -r 'echo ini_get("memory_limit"), " ", ini_get("opcache.memory_consumption");')"
+check "misspelled PHP_INI setting stops with a message" 'unknown PHP setting "opcache.memory_consumtion"' "$(docker run --rm -e PHP_INI='opcache.memory_consumtion = 5' "$IMG" 2>&1 | grep -o 'unknown PHP setting "opcache.memory_consumtion"')"
+check "PHP_INI syntax error stops with a message" "syntax error" "$(docker run --rm -e PHP_INI='a = = b' "$IMG" 2>&1 | grep -o 'syntax error')"
+check "invalid UPLOAD_MAX_SIZE stops with a message" 'Invalid quantity "abc"' "$(docker run --rm -e UPLOAD_MAX_SIZE=abc "$IMG" 2>&1 | grep -o 'Invalid quantity "abc"')"
+check "PHP_INI on a read-only filesystem stops with a message" "can't write PHP_INI" "$(docker run --rm --read-only -e PHP_INI='memory_limit = 1G' "$IMG" php -v 2>&1 | grep -o "can't write PHP_INI")"
+check "read-only filesystem without PHP_INI still starts" ok "$(docker run --rm --read-only "$IMG" php -r 'echo "ok";' 2>/dev/null)"
 
 # PHP threads: two per available CPU, at most 4, unless FRANKENPHP_CONFIG
 # sets num_threads. Read from FrankenPHP's own startup log line, which
@@ -315,6 +323,20 @@ check "X-Forwarded_Proto (mixed) from untrusted client dropped" "none off" "$(cu
 check "startup log says mail isn't configured" 1 "$(docker logs $LIM 2>&1 | grep -c 'FrankenPress: mail is NOT configured')"
 check "mail() without a relay fails in a web request" false "$(curl -s "http://localhost:$((PORT + 1))/mail.php")"
 check "the failed mail is logged" 1 "$(docker logs $LIM 2>&1 | grep -c 'sendmail: no SMTP relay configured')"
+docker rm -fv $LIM >/dev/null
+
+# Caddy's request body limit follows PHP's post_max_size, and docker exec
+# sees PHP_INI
+docker run -d --name $LIM -p $((PORT + 1)):80 -e UPLOAD_MAX_SIZE=1K -e PHP_INI='memory_limit = 300M' "$IMG" >/dev/null
+for _ in $(seq 1 30); do curl -s -o /dev/null "http://localhost:$((PORT + 1))/healthz" && break; sleep 1; done
+check "body over UPLOAD_MAX_SIZE refused by Caddy (413)" 413 "$(head -c 2048 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz")"
+check "body under UPLOAD_MAX_SIZE accepted" 200 "$(head -c 512 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz")"
+check "startup log shows the upload limits" 1 "$(docker logs $LIM 2>&1 | grep -c 'FrankenPress: uploads up to 1K, request bodies up to 1K')"
+check "docker exec sees PHP_INI and UPLOAD_MAX_SIZE" "300M 1K" "$(docker exec $LIM php -r 'echo ini_get("memory_limit"), " ", ini_get("upload_max_filesize");')"
+docker rm -fv $LIM >/dev/null
+docker run -d --name $LIM -p $((PORT + 1)):80 -e UPLOAD_MAX_SIZE=1K -e REQUEST_BODY_MAX_BYTES=4096 "$IMG" >/dev/null
+for _ in $(seq 1 30); do curl -s -o /dev/null "http://localhost:$((PORT + 1))/healthz" && break; sleep 1; done
+check "explicit REQUEST_BODY_MAX_BYTES wins" "200 413" "$(head -c 2048 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz") $(head -c 8192 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz")"
 docker rm -fv $LIM >/dev/null
 check "invalid UMASK stops the container with a message" "FrankenPress: invalid UMASK 'abc'" "$(docker run --rm -e UMASK=abc "$IMG" 2>&1 | grep -o "FrankenPress: invalid UMASK 'abc'")"
 
