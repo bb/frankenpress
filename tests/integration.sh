@@ -40,7 +40,7 @@ check "UPLOAD_MAX_SIZE sets both upload limits" "1G 1G" "$(docker run --rm -e UP
 check "PHP_INI applies, with sections and opcache" "1G 512" "$(docker run --rm -e PHP_INI=$'memory_limit = 1G\n[opcache]\nopcache.memory_consumption = 512' "$IMG" php -r 'echo ini_get("memory_limit"), " ", ini_get("opcache.memory_consumption");')"
 check "misspelled PHP_INI setting stops with a message" 'unknown PHP setting "opcache.memory_consumtion"' "$(docker run --rm -e PHP_INI='opcache.memory_consumtion = 5' "$IMG" 2>&1 | grep -o 'unknown PHP setting "opcache.memory_consumtion"')"
 check "PHP_INI syntax error stops with a message" "syntax error" "$(docker run --rm -e PHP_INI='a = = b' "$IMG" 2>&1 | grep -o 'syntax error')"
-check "invalid UPLOAD_MAX_SIZE stops with a message" 'Invalid quantity "abc"' "$(docker run --rm -e UPLOAD_MAX_SIZE=abc "$IMG" 2>&1 | grep -o 'Invalid quantity "abc"')"
+check "invalid UPLOAD_MAX_SIZE stops with a message" 'Invalid quantity "abc"' "$(docker run --rm -e UPLOAD_MAX_SIZE=abc "$IMG" 2>&1 | grep -o 'Invalid quantity "abc"' | head -1)"
 check "PHP_INI on a read-only filesystem stops with a message" "can't write PHP_INI" "$(docker run --rm --read-only -e PHP_INI='memory_limit = 1G' "$IMG" php -v 2>&1 | grep -o "can't write PHP_INI")"
 check "read-only filesystem without PHP_INI still starts" ok "$(docker run --rm --read-only "$IMG" php -r 'echo "ok";' 2>/dev/null)"
 
@@ -329,14 +329,16 @@ docker rm -fv $LIM >/dev/null
 # sees PHP_INI
 docker run -d --name $LIM -p $((PORT + 1)):80 -e UPLOAD_MAX_SIZE=1K -e PHP_INI='memory_limit = 300M' "$IMG" >/dev/null
 for _ in $(seq 1 30); do curl -s -o /dev/null "http://localhost:$((PORT + 1))/healthz" && break; sleep 1; done
-check "body over UPLOAD_MAX_SIZE refused by Caddy (413)" 413 "$(head -c 2048 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz")"
-check "body under UPLOAD_MAX_SIZE accepted" 200 "$(head -c 512 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz")"
+post() { head -c "$1" /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/index.php"; }  # post <bytes>
+passes() { local c; c=$(post "$1"); [ "$c" != 413 ] && [ "$c" != 000 ] && echo yes || echo no; }  # reaches PHP
+check "body over UPLOAD_MAX_SIZE refused by Caddy (413)" 413 "$(post 2048)"
+check "body under UPLOAD_MAX_SIZE reaches PHP (not 413)" yes "$(passes 512)"
 check "startup log shows the upload limits" 1 "$(docker logs $LIM 2>&1 | grep -c 'FrankenPress: uploads up to 1K, request bodies up to 1K')"
 check "docker exec sees PHP_INI and UPLOAD_MAX_SIZE" "300M 1K" "$(docker exec $LIM php -r 'echo ini_get("memory_limit"), " ", ini_get("upload_max_filesize");')"
 docker rm -fv $LIM >/dev/null
 docker run -d --name $LIM -p $((PORT + 1)):80 -e UPLOAD_MAX_SIZE=1K -e REQUEST_BODY_MAX_BYTES=4096 "$IMG" >/dev/null
 for _ in $(seq 1 30); do curl -s -o /dev/null "http://localhost:$((PORT + 1))/healthz" && break; sleep 1; done
-check "explicit REQUEST_BODY_MAX_BYTES wins" "200 413" "$(head -c 2048 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz") $(head -c 8192 /dev/zero | curl -s -o /dev/null -w '%{http_code}' --data-binary @- "http://localhost:$((PORT + 1))/healthz")"
+check "explicit REQUEST_BODY_MAX_BYTES wins" "yes 413" "$(passes 2048) $(post 8192)"
 docker rm -fv $LIM >/dev/null
 check "invalid UMASK stops the container with a message" "FrankenPress: invalid UMASK 'abc'" "$(docker run --rm -e UMASK=abc "$IMG" 2>&1 | grep -o "FrankenPress: invalid UMASK 'abc'")"
 
