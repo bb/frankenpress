@@ -17,6 +17,7 @@
 # Build targets:
 # - standard (default): WordPress on FrankenPHP
 # - vips-ffi: standard + libvips/FFI and the VIPS image editor plugin
+# - weasyprint: standard + WeasyPrint for HTML-to-PDF (e.g. CiviCRM)
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -57,6 +58,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # - gd: Image manipulation library
 # - intl: Internationalization support
 # - mysqli: MySQL database driver
+# - pdo_mysql: MySQL driver for PDO (CiviCRM, plugins that use PDO)
 # - zip: Archive handling
 # - imagick: Advanced image processing (alternative to GD)
 # - memcached: Object caching backend
@@ -88,6 +90,7 @@ RUN install-php-extensions \
         gd \
         intl \
         mysqli \
+        pdo_mysql \
         zip \
         imagick-3.8.1 \
         memcached-3.4.0 \
@@ -444,6 +447,62 @@ RUN php -r '$z = new ZipArchive(); $z->open("/tmp/vips-image-editor-ffi.zip") ==
         echo 'extension=ffi'; \
         echo 'ffi.enable=true'; \
     } > $PHP_INI_DIR/conf.d/docker-php-ext-ffi.ini
+
+USER $USER_NAME
+
+# -----------------------------------------------------------------------------
+# Stage 5: WeasyPrint Variant
+# -----------------------------------------------------------------------------
+# Adds WeasyPrint, which renders HTML to PDF (CiviCRM uses it for letters and
+# invoices), with Pango and a set of fonts; the standard image has no fonts.
+# WeasyPrint comes from PyPI, not Debian: trixie's 62.3 is open to
+# CVE-2025-68616, CVE-2026-49452, CVE-2026-55073 and GHSA-r543-q48m-4c9j.
+# weasyprint/requirements.txt pins it and all its dependencies with hashes
+# (uv pip compile, see the file header); Dependabot keeps it current.
+# Build with: docker build --target weasyprint .
+FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
+
+# Installs into /opt/weasyprint on Debian's python3, so the venv works
+# unchanged in the variant below. Wheels only: the image has no compiler, and
+# a missing wheel should fail the build rather than fall back to a source build.
+FROM standard AS weasyprint-build
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
+    --mount=type=bind,source=weasyprint/requirements.txt,target=/tmp/requirements.txt \
+    export UV_PYTHON_DOWNLOADS=never UV_NO_CACHE=1 \
+    && uv venv --python /usr/bin/python3 /opt/weasyprint \
+    && uv pip install --python /opt/weasyprint/bin/python --require-hashes --only-binary :all: \
+        -r /tmp/requirements.txt
+
+FROM standard AS weasyprint
+
+ARG USER_NAME=www-data
+
+# fontconfig wants a writable per-user cache, and the web user's home isn't
+ENV XDG_CACHE_HOME=/tmp/.cache
+
+USER root
+
+# - python3: runs WeasyPrint (same Debian package as in weasyprint-build)
+# - Pango and HarfBuzz: WeasyPrint's text layout, loaded at runtime
+# - fonts: Noto for broad script coverage, DejaVu and FreeFont as the usual
+#   sans/serif/mono fallbacks
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        libharfbuzz-subset0 \
+        fonts-noto-core \
+        fonts-dejavu-core \
+        fonts-freefont-ttf \
+    && fc-cache -f \
+    && rm -rf /var/cache/apt/archives \
+        /var/lib/apt/lists/*
+
+COPY --from=weasyprint-build /opt/weasyprint /opt/weasyprint
+RUN ln -s /opt/weasyprint/bin/weasyprint /usr/local/bin/weasyprint
 
 USER $USER_NAME
 

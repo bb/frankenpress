@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Integration test for a built FrankenPress image.
 #
-# Usage: tests/integration.sh <image> <standard|vips-ffi>
+# Usage: tests/integration.sh <image> <standard|vips-ffi|weasyprint>
 #
 # Starts MariaDB and the image, installs WordPress, then checks runtime health,
 # the hardening rules, proxy handling and image processing. Needs Docker and
@@ -95,6 +95,7 @@ check "wp-admin css (static)" 200 "$(code /wp-admin/css/login.min.css)"
 # MariaDB client: wp db round trip, and the tools against a server without
 # TLS, which the client's default certificate verification would refuse
 check "wp db query" 1 "$(docker exec $WP wp db query 'SELECT COUNT(*) FROM wp_users' --skip-column-names 2>/dev/null)"
+check "PDO MySQL query" 1 "$(docker exec $WP wp eval '$p = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME, DB_USER, DB_PASSWORD); echo $p->query("SELECT COUNT(*) FROM wp_users")->fetchColumn();' 2>/dev/null)"
 docker exec $WP sh -c 'wp db export /tmp/db.sql >/dev/null 2>&1 && wp option update blogname changed >/dev/null 2>&1 && wp db import /tmp/db.sql >/dev/null 2>&1'
 check "wp db export + import restore the site" T "$(docker exec $WP wp option get blogname 2>/dev/null)"
 for _ in $(seq 1 40); do docker exec $DBOLD mariadb -uroot -pr -e 'select 1' >/dev/null 2>&1 && break; sleep 2; done
@@ -279,6 +280,13 @@ pdfthumb=$(docker exec $WP sh -c 'id=$(wp media import /tmp/t.pdf --porcelain) &
 check "PDF upload gets a thumbnail" yes "$pdfthumb"
 if [ "$VARIANT" = vips-ffi ]; then
   check "VIPS editor in use" 'NotGlossy\VipsImageEditorFFI\Image_Editor_Vips_FFI' "$(docker exec $WP wp eval 'echo get_class(wp_get_image_editor("/tmp/t.jpg"));' 2>/dev/null)"
+fi
+if [ "$VARIANT" = weasyprint ]; then
+  # Rendered from a web request, as CiviCRM does, as the web user: fontconfig
+  # must find its fonts and cache without warnings
+  docker exec $WP sh -c 'echo "<?php \$p = proc_open([\"/usr/local/bin/weasyprint\", \"-\", \"-\"], [[\"pipe\", \"r\"], [\"pipe\", \"w\"], [\"pipe\", \"w\"]], \$io); fwrite(\$io[0], \"<h1>Grüße, Ελληνικά</h1>\"); fclose(\$io[0]); \$pdf = stream_get_contents(\$io[1]); \$err = stream_get_contents(\$io[2]); echo proc_close(\$p), \" \", substr(\$pdf, 0, 5), \" [\", trim(\$err), \"]\";" > weasyprint.php'
+  check "WeasyPrint renders a PDF from a web request" "0 %PDF- []" "$(curl -s $B/weasyprint.php)"
+  check "fonts installed" yes "$(docker exec $WP sh -c 'fc-list | grep -q DejaVu && echo yes || echo no')"
 fi
 
 # Mail: PHP's mail() during a web request goes through sendmail -> msmtp

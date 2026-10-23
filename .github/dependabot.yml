@@ -1,6 +1,7 @@
-# Weekly pull requests for the commit-pinned GitHub Actions and the
+# Weekly pull requests for the commit-pinned GitHub Actions, the
 # digest-pinned Dockerfile base images (wordpress, dunglas/frankenphp,
-# debian). Each pull request runs the PR build and integration test.
+# debian, uv) and the hash-pinned WeasyPrint dependencies. Each pull request
+# runs the PR build and integration test.
 #
 # Base image updates only reach the published images once their pull request
 # is merged; the weekly scheduled rebuild still picks up Debian package
@@ -28,3 +29,13 @@ updates:
     groups:
       base-images:
         update-types: ["minor", "patch"]
+
+  # WeasyPrint and its dependencies for the weasyprint variant, compiled with
+  # hashes by uv (weasyprint/requirements.in -> requirements.txt)
+  - package-ecosystem: pip
+    directory: /weasyprint
+    schedule:
+      interval: weekly
+    groups:
+      weasyprint:
+        patterns: ["*"]

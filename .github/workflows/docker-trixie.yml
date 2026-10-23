@@ -16,6 +16,7 @@ on:
       - 'frankenpress-cron.sh'
       - 'frankenpress-cron.php'
       - 'wp-cli.yml'
+      - 'weasyprint/requirements.txt'
       - '.dockerignore'
       - 'tests/**'
       - '.github/workflows/docker-trixie.yml'
@@ -50,7 +51,7 @@ jobs:
       matrix:
         php-version: ['8.5']
         # Dockerfile targets; the tag suffix is derived from the variant name
-        variant: [standard, vips-ffi]
+        variant: [standard, vips-ffi, weasyprint]
         # Split platforms to use native runners (amd64 on x64, arm64 on ARM); PRs build amd64 only
         platform: ${{ github.event_name == 'pull_request' && fromJSON('["linux/amd64"]') || fromJSON('["linux/amd64", "linux/arm64"]') }}
       fail-fast: false
@@ -97,8 +98,8 @@ jobs:
           tags: |
             type=raw,value=${{ env.ARCH_TAG }}
           labels: |
-            org.opencontainers.image.title=FrankenPress${{ matrix.variant == 'vips-ffi' && ' VIPS/FFI' || '' }} (PHP ${{ matrix.php-version }} Trixie)
-            org.opencontainers.image.description=WordPress${{ matrix.variant == 'vips-ffi' && ' with VIPS and FFI' || '' }} running on FrankenPHP with Debian Trixie
+            org.opencontainers.image.title=FrankenPress${{ matrix.variant == 'vips-ffi' && ' VIPS/FFI' || matrix.variant == 'weasyprint' && ' WeasyPrint' || '' }} (PHP ${{ matrix.php-version }} Trixie)
+            org.opencontainers.image.description=WordPress${{ matrix.variant == 'vips-ffi' && ' with VIPS and FFI' || matrix.variant == 'weasyprint' && ' with WeasyPrint for PDFs' || '' }} running on FrankenPHP with Debian Trixie
             org.opencontainers.image.licenses=MIT
           flavor: |
             latest=false
@@ -115,7 +116,7 @@ jobs:
           target: ${{ matrix.variant }}
           load: true
           tags: ${{ steps.meta.outputs.tags }}
-          # Each variant writes its own cache scope; vips-ffi also reads the standard
+          # Each variant writes its own cache scope; the variants also read the standard
           # scope so the shared base layers are reused.
           cache-from: |
             type=gha,scope=${{ env.CACHE_SCOPE }}-standard
@@ -145,6 +146,7 @@ jobs:
           # step under pipefail.
           modules=$(run php -m)
           grep -qx 'Zend OPcache' <<<"$modules"
+          grep -qx pdo_mysql <<<"$modules"
 
           # Security floor: PHP2Shell (CVE-2026-109618/109619) and the
           # FrankenPHP advisories fixed in 1.13.2. Fails closed when a version
@@ -165,6 +167,13 @@ jobs:
             grep -q libvips <<<"$(run dpkg -l)"
             grep -qx vips-image-editor-ffi <<<"$(run ls /usr/src/wordpress/wp-content/plugins)"
             grep -qx 1 <<<"$(run printenv VIPS_BLOCK_UNTRUSTED)"
+          fi
+
+          # Security floor for WeasyPrint, as above: 70.0 fixes the CVEs of
+          # Debian's 62.3 (see the Dockerfile)
+          if [ "${{ matrix.variant }}" = weasyprint ]; then
+            weasy_version=$(run weasyprint --version | sed -nE 's/^WeasyPrint version ([0-9.]+)$/\1/p')
+            at_least "$weasy_version" 70.0 || { echo "::error::WeasyPrint '$weasy_version' is older than 70.0"; exit 1; }
           fi
 
       # Full run against WordPress + MariaDB: hardening rules, proxy handling,
@@ -259,7 +268,7 @@ jobs:
     strategy:
       matrix:
         php-version: ['8.5']
-        variant: [standard, vips-ffi]
+        variant: [standard, vips-ffi, weasyprint]
     env:
       # Tag suffix shared by both registries, e.g. "trixie" or "vips-ffi-trixie"
       SUFFIX: ${{ matrix.variant != 'standard' && format('{0}-', matrix.variant) || '' }}trixie
@@ -296,7 +305,7 @@ jobs:
           for repo in "${{ env.DOCKERHUB_IMAGE }}" "ghcr.io/${{ github.repository_owner }}/frankenpress"; do
             tags=(-t "$repo:$tag" -t "$repo:$tag-wp$wp" -t "$repo:$tag-wp$wp-$build_date")
             if [ "${{ matrix.php-version }}" = "$LATEST_PHP" ]; then
-              # standard: trixie + latest; vips-ffi: vips-ffi-trixie + vips-ffi
+              # standard: trixie + latest; vips-ffi: vips-ffi-trixie + vips-ffi (same for weasyprint)
               tags+=(-t "$repo:$SUFFIX" -t "$repo:${{ matrix.variant == 'standard' && 'latest' || matrix.variant }}")
             fi
             docker buildx imagetools create "${tags[@]}" "$repo:$tag-amd64" "$repo:$tag-arm64"
