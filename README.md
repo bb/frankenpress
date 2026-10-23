@@ -32,20 +32,24 @@ docker compose up -d
 - `bock/frankenpress:vips-ffi` / `vips-ffi-trixie` - Latest VIPS (PHP 8.5) on Debian Trixie (amd64, arm64)
 - `bock/frankenpress:php-8.5-vips-ffi-trixie` - PHP 8.5 VIPS on Debian Trixie (amd64, arm64)
 
-All images are built on Debian 13 (Trixie) with PHP 8.5. Both variants come from the same `Dockerfile`: the VIPS image is its `vips-ffi` target (`docker build --target vips-ffi .`).
+### WeasyPrint Images (HTML to PDF, e.g. for CiviCRM)
+- `bock/frankenpress:weasyprint` / `weasyprint-trixie` - Latest WeasyPrint (PHP 8.5) on Debian Trixie (amd64, arm64)
+- `bock/frankenpress:php-8.5-weasyprint-trixie` - PHP 8.5 WeasyPrint on Debian Trixie (amd64, arm64)
+
+All images are built on Debian 13 (Trixie) with PHP 8.5. All variants come from the same `Dockerfile`: the VIPS image is its `vips-ffi` target (`docker build --target vips-ffi .`), the WeasyPrint image its `weasyprint` target. The variants can't be combined; there is no image with both VIPS and WeasyPrint.
 
 ### Pinning a Version
 The tags above follow the weekly rebuilds. To pin a deployment, or roll back after an update, use the version-specific tags published with every build:
 - `bock/frankenpress:php-8.5-trixie-wp7.1.2`: a specific WordPress version, still updated by the weekly rebuilds of that version
 - `bock/frankenpress:php-8.5-trixie-wp7.1.2-20261004-0112`: one specific build (WordPress version plus build date and UTC time). Builds before 2026-10-03 have only the date, e.g. `-20261002`, which the last build of that day overwrote
 
-The same pattern applies to the VIPS images, e.g. `php-8.5-vips-ffi-trixie-wp7.1.2-20261004-0112`. See the [tag list on Docker Hub](https://hub.docker.com/r/bock/frankenpress/tags) for available builds.
+The same pattern applies to the VIPS and WeasyPrint images, e.g. `php-8.5-vips-ffi-trixie-wp7.1.2-20261004-0112`. See the [tag list on Docker Hub](https://hub.docker.com/r/bock/frankenpress/tags) for available builds.
 
 ## Performance & Build Optimization
 
 All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) for maximum performance and speed. This eliminates QEMU emulation overhead, resulting in significantly faster build times.
 
-The PHP extensions are compiled in a separate build stage on the official [FrankenPHP image](https://hub.docker.com/r/dunglas/frankenphp). The published image is Debian slim plus PHP, FrankenPHP and only the libraries they link against, with no compiler toolchain. That puts the standard image at about 615 MB and the VIPS image at about 680 MB.
+The PHP extensions are compiled in a separate build stage on the official [FrankenPHP image](https://hub.docker.com/r/dunglas/frankenphp). The published image is Debian slim plus PHP, FrankenPHP and only the libraries they link against, with no compiler toolchain. That puts the standard image at about 615 MB, the VIPS image at about 680 MB and the WeasyPrint image at about 780 MB.
 
 The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by digest in the `Dockerfile`, so every build uses exactly the images recorded in git. Dependabot opens a pull request when one of them changes, and CI runs the full integration test on it before it's merged. Debian package updates in the final image still arrive with every weekly rebuild. Every build, scheduled ones included, runs the same smoke and integration tests on both architectures, and is only pushed if they pass.
 
@@ -82,12 +86,16 @@ There is no built-in page cache. Use a caching plugin, and Redis for the object 
 - gd
 - intl
 - mysqli
+- pdo_mysql
 - zip
 - imagick
 
 **VIPS Images Only:**
 - FFI (Foreign Function Interface)
 - libvips (high-performance image processing)
+
+**WeasyPrint Images Only:**
+- [WeasyPrint](https://weasyprint.org/) at `/usr/local/bin/weasyprint`, from PyPI (pinned with hashes in `weasyprint/requirements.txt`), with Pango and the Noto, DejaVu and FreeFont fonts. For CiviCRM, set its WeasyPrint path setting to `/usr/local/bin/weasyprint`.
 
 ### Environment Variables
 
