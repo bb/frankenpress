@@ -353,6 +353,10 @@ RUN sed -i \
 # - healthz.php: served only on 127.0.0.1:2080 for the HEALTHCHECK below
 # - prepend.php: runtime settings loaded before every request (php.ini)
 COPY php.ini $PHP_INI_DIR/conf.d/wp.ini
+# PHP_INI from the environment lands here (see frankenpress-entrypoint.sh);
+# the zz- prefix makes PHP read it last. Owned by the web user, as the
+# entrypoint runs as that user.
+RUN install -o ${USER_NAME} -g ${USER_NAME} -m 644 /dev/null $PHP_INI_DIR/conf.d/zz-frankenpress-env.ini
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY imagemagick-policy.xml /etc/ImageMagick-7/policy.xml
 COPY wp-cli.yml /usr/local/etc/wp-cli.yml

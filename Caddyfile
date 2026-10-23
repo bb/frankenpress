@@ -58,7 +58,8 @@ http://127.0.0.1:2080 {
 	respond /healthz "ok" 200
 
 	# Refuse requests that announce a body above the upload limit (413) before
-	# PHP starts on them. Default: 536870912 bytes = php.ini's 512M. Caddy's
+	# PHP starts on them. The entrypoint sets REQUEST_BODY_MAX_BYTES from
+	# PHP's post_max_size unless it's given; 536870912 = php.ini's 512M. Caddy's
 	# request_body max_size is deliberately not used: with FrankenPHP it
 	# truncates the body silently and PHP processes the cut-off data. Chunked
 	# requests without Content-Length are still capped by PHP's post_max_size.
