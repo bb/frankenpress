@@ -147,7 +147,17 @@ jobs:
           # step under pipefail.
           modules=$(run php -m)
           grep -qx 'Zend OPcache' <<<"$modules"
-          grep -qx pdo_mysql <<<"$modules"
+
+          # Every extension from the Dockerfile's install-php-extensions list:
+          # a dropped entry still starts cleanly, so the warning check misses it
+          for ext in bcmath exif gd intl mysqli pdo_mysql zip imagick memcached apcu redis igbinary msgpack; do
+            grep -qx "$ext" <<<"$modules" || { echo "::error::Missing PHP extension: $ext"; exit 1; }
+          done
+
+          # FFI is installed everywhere but only enabled in the vips-ffi image
+          if [ "${{ matrix.variant }}" != vips-ffi ] && grep -qx FFI <<<"$modules"; then
+            echo "::error::FFI is enabled outside the vips-ffi image"; exit 1
+          fi
 
           # Security floor: PHP2Shell (CVE-2026-109618/109619) and the
           # FrankenPHP advisories fixed in 1.13.2. Fails closed when a version
