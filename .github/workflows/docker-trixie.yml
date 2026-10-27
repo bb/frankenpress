@@ -76,14 +76,14 @@ jobs:
       # logins; secrets aren't available to PRs from forks anyway.
       - name: Login to Docker Hub
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -160,14 +160,14 @@ jobs:
           fi
 
           # Security floor: PHP2Shell (CVE-2026-109618/109619) and the
-          # FrankenPHP advisories fixed in 1.13.2. Fails closed when a version
+          # FrankenPHP advisories fixed in 1.13.4. Fails closed when a version
           # can't be parsed. Raise these after the next security release.
           at_least() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
           fp=$(run frankenphp version)
           echo "$fp"
           fp_version=$(sed -nE 's/^FrankenPHP v([0-9.]+) .*/\1/p' <<<"$fp")
           php_version=$(run php -r 'echo PHP_VERSION;')
-          at_least "$fp_version" 1.13.2 || { echo "::error::FrankenPHP '$fp_version' is older than 1.13.2"; exit 1; }
+          at_least "$fp_version" 1.13.4 || { echo "::error::FrankenPHP '$fp_version' is older than 1.13.4"; exit 1; }
           at_least "$php_version" 8.5.12 || { echo "::error::PHP '$php_version' is older than 8.5.12"; exit 1; }
 
           run wp --version
@@ -238,7 +238,7 @@ jobs:
         continue-on-error: true
         env:
           IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
-          TRIVY: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+          TRIVY: aquasec/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222
         run: |
           set -euo pipefail
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" "$TRIVY" \
@@ -267,7 +267,7 @@ jobs:
       - name: Upload Trivy results to code scanning
         if: matrix.platform == 'linux/amd64'
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: trivy.sarif
           category: trivy-${{ matrix.variant }}
@@ -288,13 +288,13 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Login to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}

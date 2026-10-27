@@ -35,7 +35,7 @@
 # -----------------------------------------------------------------------------
 # Pull WordPress core files from the official WordPress Docker image
 # This stage is used only to extract files, not run WordPress
-FROM wordpress:7.1.3@sha256:f3e6835fa7d4a5b786615c24b67ec70816e06ebd517d31276bef423e49dfd126 AS wp
+FROM wordpress:7.1.3@sha256:e5a724ec7ad9055f48b2941ac1b674b08e77ed60edb8937a6254fb89ec45ddf7 AS wp
 
 # -----------------------------------------------------------------------------
 # Stage 2: PHP Build
@@ -47,7 +47,7 @@ FROM wordpress:7.1.3@sha256:f3e6835fa7d4a5b786615c24b67ec70816e06ebd517d31276bef
 # into the final image.
 # Tag format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_CODENAME} (multi-arch)
 # See: https://hub.docker.com/r/dunglas/frankenphp
-FROM dunglas/frankenphp:1-php8.5-trixie@sha256:8a7a935deb33959200628497b8201423c8b777d513a62ac1b69a91c624afdb3d AS php-build
+FROM dunglas/frankenphp:1-php8.5-trixie@sha256:ada77754f475352a9105b7961f89ab17ece97048514799532d2d27a1dea2fda7 AS php-build
 
 # bash with pipefail, so a library without a Debian package fails the build
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -468,7 +468,7 @@ USER $USER_NAME
 # weasyprint/requirements.txt pins it and all its dependencies with hashes
 # (uv pip compile, see the file header); Dependabot keeps it current.
 # Build with: docker build --target weasyprint .
-FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
+FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
 
 # Installs into /opt/weasyprint on Debian's python3, so the venv works
 # unchanged in the variant below. Wheels only: the image has no compiler, and
