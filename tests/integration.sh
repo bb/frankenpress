@@ -170,6 +170,19 @@ docker exec $WP sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $caps' > 
 check "plugin/theme install+upload refused, update/activate/delete allowed (web)" 0000111 "$(curl -s $B/caps.php)"
 check "plugin/theme install+upload refused, update/activate/delete allowed (wp-cli)" 0000111 "$(docker exec $WP wp eval "$caps" 2>/dev/null)"
 check "application passwords off by default (HTTPS supported, not available)" s- "$(curl -s -H 'X-Forwarded-Proto: https' $B/apw.php)"
+# RESTRICT_REST_USERS: on by default, =0 turns it off ($WP3 below). Visitors
+# get 401 on every spelling of the user routes and in embedded links; logged
+# in, the admin lists users, a subscriber only reaches /users/me.
+check "REST users list refused to visitors" 401 "$(code /wp-json/wp/v2/users)"
+check "REST single user refused to visitors" 401 "$(code /wp-json/wp/v2/users/1)"
+check "REST users via ?rest_route= refused to visitors" 401 "$(code '/?rest_route=/wp/v2/users')"
+check "REST users in other case refused to visitors" 401 "$(code /wp-json/WP/V2/USERS)"
+check "REST users with doubled slash refused to visitors" 401 "$(code '/?rest_route=//wp/v2//users')"
+check "embedded post author refused to visitors" rest_not_logged_in "$(curl -s "$B/wp-json/wp/v2/posts?per_page=1&_embed=author" | jq -r '.[0]._embedded.author[0].code' 2>/dev/null)"
+check "other REST routes still public (posts)" 200 "$(code /wp-json/wp/v2/posts)"
+sub=$(docker exec $WP wp user create sub sub@example.com --role=subscriber --porcelain 2>/dev/null)
+users_as='foreach ([[1, "/wp/v2/users"], [1, "/wp/v2/users/1"], [SUB, "/wp/v2/users"], [SUB, "/wp/v2/users/1"], [SUB, "/wp/v2/users/me"]] as [$u, $r]) { wp_set_current_user($u); echo rest_do_request(new WP_REST_Request("GET", $r))->get_status(), " "; }'
+check "logged in: admin lists users, subscriber only /me" "200 200 403 403 200 " "$(docker exec $WP wp eval "${users_as//SUB/$sub}" 2>/dev/null)"
 # CORE_UPGRADE_SKIP_NEW_BUNDLED: on by default, a site's own define in
 # WORDPRESS_CONFIG_EXTRA wins without "Constant already defined" warnings,
 # and CORE_UPGRADE_SKIP_NEW_BUNDLED=0 without a define leaves it undefined
@@ -178,7 +191,7 @@ docker exec $WP sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $skip_bun
 check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (web)" true "$(curl -s $B/skip.php)"
 check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (wp-cli)" true "$(docker exec $WP wp eval "$skip_bundled" 2>/dev/null)"
 docker run -d --name $WP2 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e "WORDPRESS_CONFIG_EXTRA=define('CORE_UPGRADE_SKIP_NEW_BUNDLED', false); define('DISALLOW_FILE_EDIT', false); define('DISABLE_WP_CRON', false);" "$IMG" >/dev/null
-docker run -d --name $WP3 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e CRON=0 -e CORE_UPGRADE_SKIP_NEW_BUNDLED=0 -e DISALLOW_FILE_EDIT=0 -e DISALLOW_PLUGIN_THEME_INSTALL=0 -e DISABLE_APPLICATION_PASSWORDS=0 "$IMG" >/dev/null
+docker run -d --name $WP3 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e CRON=0 -e CORE_UPGRADE_SKIP_NEW_BUNDLED=0 -e DISALLOW_FILE_EDIT=0 -e DISALLOW_PLUGIN_THEME_INSTALL=0 -e DISABLE_APPLICATION_PASSWORDS=0 -e RESTRICT_REST_USERS=0 "$IMG" >/dev/null
 for c in $WP2 $WP3; do
   for _ in $(seq 1 30); do docker exec $c curl -s -o /dev/null http://127.0.0.1/healthz 2>/dev/null && break; sleep 1; done
 done
@@ -199,6 +212,7 @@ check "DISALLOW_FILE_EDIT=0 turns it off (wp-cli)" "'undefined'" "$(docker exec 
 docker exec $WP3 sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $caps' > caps.php; echo '<?php require __DIR__ . \"/wp-load.php\"; $apw' > apw.php"
 check "DISALLOW_PLUGIN_THEME_INSTALL=0 allows installs again" 1111111 "$(docker exec $WP3 curl -s http://127.0.0.1/caps.php)"
 check "DISABLE_APPLICATION_PASSWORDS=0 brings them back" sa "$(docker exec $WP3 curl -s -H 'X-Forwarded-Proto: https' http://127.0.0.1/apw.php)"
+check "RESTRICT_REST_USERS=0 lists users to visitors again" 200 "$(docker exec $WP3 curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1/?rest_route=/wp/v2/users')"
 check "CRON=0: no cron runner" 0 "$(docker logs $WP3 2>&1 | grep -c 'FrankenPress: WP-Cron runs')"
 check "CRON=0: page loads run WP-Cron again (DISABLE_WP_CRON unset)" "'undefined'" "$(docker exec $WP3 wp eval "$dwc" 2>/dev/null)"
 check "CRON=0: wp-cron.php reachable" 200 "$(docker exec $WP3 curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/wp-cron.php)"
