@@ -9,8 +9,9 @@
  *
  * Switches accept 1/true/yes/on (case-insensitive); anything else is off,
  * except DISALLOW_FILE_EDIT, CORE_UPGRADE_SKIP_NEW_BUNDLED,
- * DISALLOW_PLUGIN_THEME_INSTALL and DISABLE_APPLICATION_PASSWORDS, which are
- * on unless set to 0/false/no/off, and DISABLE_WP_CRON, which follows CRON.
+ * DISALLOW_PLUGIN_THEME_INSTALL, DISABLE_APPLICATION_PASSWORDS and
+ * RESTRICT_REST_USERS, which are on unless set to 0/false/no/off, and
+ * DISABLE_WP_CRON, which follows CRON.
  */
 
 $frankenpress_enabled = static function (string $name): bool {
@@ -124,6 +125,38 @@ if (!$frankenpress_disabled('DISABLE_APPLICATION_PASSWORDS')) {
             return false;
         },
         'accepted_args' => 0,
+    ];
+}
+
+// RESTRICT_REST_USERS, on by default; =0 turns it off: the REST API's user
+// routes (/wp/v2/users, /wp/v2/users/<id>) answer only logged-in users who
+// can write posts. WordPress otherwise lists every author with published
+// posts, login slug included, to anyone, which is how scanners collect
+// usernames for password guessing. The block editor needs these routes (the
+// author picker, @-mentions), so a proxy in front can't simply block them
+// without breaking the editor; this check lets it pass them on. Logged in
+// means a valid login cookie plus the REST nonce, which the editor sends.
+// /wp/v2/users/me stays open to every logged-in user. rest_pre_dispatch also
+// runs for each request inside /batch/v1 and for embedded links, so neither
+// reaches the routes around this check. Visitors get 401, logged-in users
+// without edit_posts 403.
+if (!$frankenpress_disabled('RESTRICT_REST_USERS')) {
+    $GLOBALS['wp_filter']['rest_pre_dispatch'][10][] = [
+        'function' => static function ($result, $server, $request) {
+            $route = $request->get_route();
+            if ($result !== null || !preg_match('#^/+wp/v2/+users(?:/|$)#i', $route)) {
+                return $result;
+            }
+            if (!is_user_logged_in()) {
+                return new WP_Error('rest_not_logged_in', 'You are not currently logged in.', ['status' => 401]);
+            }
+            if (!preg_match('#^/+wp/v2/+users/+me(?:/|$)#i', $route)
+                && !current_user_can('edit_posts') && !current_user_can('list_users')) {
+                return new WP_Error('rest_forbidden', 'Sorry, you are not allowed to do that.', ['status' => 403]);
+            }
+            return $result;
+        },
+        'accepted_args' => 3,
     ];
 }
 
