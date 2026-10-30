@@ -27,7 +27,7 @@
 # images recorded here, and a replaced tag upstream can't change it silently.
 # Dependabot (.github/dependabot.yml) opens a pull request when a tag points
 # at a new digest or a newer version tag appears; CI tests it before merging.
-# The tags below also select the versions: WordPress 7.1.3, FrankenPHP 1.x
+# The tags below also select the versions: WordPress 7.1.4, FrankenPHP 1.x
 # with PHP 8.5 on Debian 13 (Trixie).
 
 # -----------------------------------------------------------------------------
@@ -35,7 +35,7 @@
 # -----------------------------------------------------------------------------
 # Pull WordPress core files from the official WordPress Docker image
 # This stage is used only to extract files, not run WordPress
-FROM wordpress:7.1.3@sha256:e5a724ec7ad9055f48b2941ac1b674b08e77ed60edb8937a6254fb89ec45ddf7 AS wp
+FROM wordpress:7.1.4@sha256:12ec50e21cb81a5ea964669d434578b7da4a101a45aef83f5f1c2227bcd1b058 AS wp
 
 # -----------------------------------------------------------------------------
 # Stage 2: PHP Build
@@ -47,7 +47,7 @@ FROM wordpress:7.1.3@sha256:e5a724ec7ad9055f48b2941ac1b674b08e77ed60edb8937a6254
 # into the final image.
 # Tag format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_CODENAME} (multi-arch)
 # See: https://hub.docker.com/r/dunglas/frankenphp
-FROM dunglas/frankenphp:1-php8.5-trixie@sha256:ada77754f475352a9105b7961f89ab17ece97048514799532d2d27a1dea2fda7 AS php-build
+FROM dunglas/frankenphp:1-php8.5-trixie@sha256:c8abcc7925f16b1431f139d0410abe8f48db3fd862bacb646b05a4413337106a AS php-build
 
 # bash with pipefail, so a library without a Debian package fails the build
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -119,7 +119,7 @@ RUN install-php-extensions \
 # Stage 3: Standard FrankenPress Image
 # -----------------------------------------------------------------------------
 # Must be the same Debian release as the php-build stage above
-FROM debian:13-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS standard
+FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS standard
 
 # -----------------------------------------------------------------------------
 # Metadata Labels
