@@ -35,7 +35,7 @@
 # -----------------------------------------------------------------------------
 # Pull WordPress core files from the official WordPress Docker image
 # This stage is used only to extract files, not run WordPress
-FROM wordpress:7.1.4@sha256:12ec50e21cb81a5ea964669d434578b7da4a101a45aef83f5f1c2227bcd1b058 AS wp
+FROM wordpress:7.1.4@sha256:0319fc3fd646ae16691269d40bc5fbfdd5d0a3967c311d06132285bad64b3792 AS wp
 
 # -----------------------------------------------------------------------------
 # Stage 2: PHP Build
@@ -47,7 +47,7 @@ FROM wordpress:7.1.4@sha256:12ec50e21cb81a5ea964669d434578b7da4a101a45aef83f5f1c
 # into the final image.
 # Tag format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_CODENAME} (multi-arch)
 # See: https://hub.docker.com/r/dunglas/frankenphp
-FROM dunglas/frankenphp:1-php8.5-trixie@sha256:c8abcc7925f16b1431f139d0410abe8f48db3fd862bacb646b05a4413337106a AS php-build
+FROM dunglas/frankenphp:1-php8.5-trixie@sha256:7e73a27eb7712a5b4073b92f8f0dec91e9400138604b76cc791589faaa6a639c AS php-build
 
 # bash with pipefail, so a library without a Debian package fails the build
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -119,7 +119,7 @@ RUN install-php-extensions \
 # Stage 3: Standard FrankenPress Image
 # -----------------------------------------------------------------------------
 # Must be the same Debian release as the php-build stage above
-FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS standard
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS standard
 
 # -----------------------------------------------------------------------------
 # Metadata Labels
@@ -468,7 +468,7 @@ USER $USER_NAME
 # weasyprint/requirements.txt pins it and all its dependencies with hashes
 # (uv pip compile, see the file header); Dependabot keeps it current.
 # Build with: docker build --target weasyprint .
-FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
 
 # Installs into /opt/weasyprint on Debian's python3, so the venv works
 # unchanged in the variant below. Wheels only: the image has no compiler, and
