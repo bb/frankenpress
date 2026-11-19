@@ -27,7 +27,7 @@
 # images recorded here, and a replaced tag upstream can't change it silently.
 # Dependabot (.github/dependabot.yml) opens a pull request when a tag points
 # at a new digest or a newer version tag appears; CI tests it before merging.
-# The tags below also select the versions: WordPress 7.1.4, FrankenPHP 1.x
+# The tags below also select the versions: WordPress 7.1.5, FrankenPHP 1.x
 # with PHP 8.5 on Debian 13 (Trixie).
 
 # -----------------------------------------------------------------------------
@@ -35,7 +35,7 @@
 # -----------------------------------------------------------------------------
 # Pull WordPress core files from the official WordPress Docker image
 # This stage is used only to extract files, not run WordPress
-FROM wordpress:7.1.4@sha256:074f9ef5429025dab76a4242f5b796f64ae76a49dd19b6708ad29e1893a8d383 AS wp
+FROM wordpress:7.1.5@sha256:5ae5182618e8f8015f40d24a2aec4d53352bb2c7234c1b66707250edacaf44e2 AS wp
 
 # -----------------------------------------------------------------------------
 # Stage 2: PHP Build
@@ -468,7 +468,7 @@ USER $USER_NAME
 # weasyprint/requirements.txt pins it and all its dependencies with hashes
 # (uv pip compile, see the file header); Dependabot keeps it current.
 # Build with: docker build --target weasyprint .
-FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d AS uv
 
 # Installs into /opt/weasyprint on Debian's python3, so the venv works
 # unchanged in the variant below. Wheels only: the image has no compiler, and
