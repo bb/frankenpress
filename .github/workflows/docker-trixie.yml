@@ -159,8 +159,9 @@ jobs:
             echo "::error::FFI is enabled outside the vips-ffi image"; exit 1
           fi
 
-          # Security floor: PHP2Shell (CVE-2026-109618/109619) and the
-          # FrankenPHP advisories fixed in 1.13.4. Fails closed when a version
+          # Security floor: the FrankenPHP advisories fixed in 1.13.4 and the
+          # PHP security releases of 2026-11-19 (8.5.13; 8.5.12 already fixed
+          # PHP2Shell, CVE-2026-109618/109619). Fails closed when a version
           # can't be parsed. Raise these after the next security release.
           at_least() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
           fp=$(run frankenphp version)
@@ -168,7 +169,7 @@ jobs:
           fp_version=$(sed -nE 's/^FrankenPHP v([0-9.]+) .*/\1/p' <<<"$fp")
           php_version=$(run php -r 'echo PHP_VERSION;')
           at_least "$fp_version" 1.13.4 || { echo "::error::FrankenPHP '$fp_version' is older than 1.13.4"; exit 1; }
-          at_least "$php_version" 8.5.12 || { echo "::error::PHP '$php_version' is older than 8.5.12"; exit 1; }
+          at_least "$php_version" 8.5.13 || { echo "::error::PHP '$php_version' is older than 8.5.13"; exit 1; }
 
           run wp --version
           grep -qx wp-config-docker.php <<<"$(run ls /usr/src/wordpress)"
