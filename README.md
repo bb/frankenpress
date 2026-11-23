@@ -58,6 +58,13 @@ docker buildx imagetools inspect bock/frankenpress:latest \
   --format '{{json (index .Image "linux/amd64").Config.Labels}}'
 ```
 
+To read a single label, look it up with `index`. The dots in the label name would otherwise be read as nested fields:
+
+```sh
+docker buildx imagetools inspect bock/frankenpress:latest \
+  --format '{{index (index .Image "linux/amd64").Config.Labels "org.opencontainers.image.version"}}'
+```
+
 or from a pulled image or a running container:
 
 ```sh
