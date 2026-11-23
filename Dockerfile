@@ -126,7 +126,7 @@ FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c5
 # -----------------------------------------------------------------------------
 # OCI-compliant image labels for container registries and tooling. CI adds
 # revision, version and creation date, plus frankenpress.*.version labels with
-# the PHP, FrankenPHP and WordPress versions read from the built image.
+# the PHP, FrankenPHP, Caddy and WordPress versions read from the built image.
 # See: https://github.com/opencontainers/image-spec/blob/main/annotations.md
 LABEL org.opencontainers.image.title=FrankenPress \
       org.opencontainers.image.description="Optimized WordPress containers to run everywhere. Built with FrankenPHP & Caddy." \
