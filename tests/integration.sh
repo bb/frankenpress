@@ -373,7 +373,10 @@ bundled() { # bundled [docker run options]: which bundled items a fresh core vol
   docker volume create $BUN >/dev/null
   docker run --rm -u 0 -v $BUN:/w --entrypoint sh "$IMG" -c 'mkdir -p /w/plugins /w/themes/mine && echo "/* Theme Name: Mine */" > /w/themes/mine/style.css && chown -R 33:33 /w'
   docker run -d --name $BUN -v $BUN:/var/www/html/wp-content "$@" "$IMG" >/dev/null
-  for _ in $(seq 1 30); do docker exec $BUN test -e /var/www/html/wp-includes/version.php 2>/dev/null && break; sleep 1; done
+  # Wait for the server rather than for a core file: the entrypoint copies
+  # core and wp-content in one tar, in no fixed order, so version.php can
+  # exist before the bundled plugins do
+  for _ in $(seq 1 30); do docker exec $BUN curl -fsS -o /dev/null http://127.0.0.1:2080/healthz.php 2>/dev/null && break; sleep 1; done
   echo "$(docker exec $BUN sh -c 'ls wp-content/plugins wp-content/themes | grep -cE "^(akismet|hello.php|twentytwenty)"') $(docker logs $BUN 2>&1 | grep -c 'not copying the bundled ones')"
   docker rm -fv $BUN >/dev/null; docker volume rm $BUN >/dev/null
 }
