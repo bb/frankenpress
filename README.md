@@ -65,7 +65,7 @@ docker image inspect --format '{{json .Config.Labels}}' bock/frankenpress:latest
 docker inspect --format '{{index .Config.Labels "frankenpress.php.version"}}' <container>
 ```
 
-`frankenpress.php.version`, `frankenpress.frankenphp.version` and `frankenpress.wordpress.version` hold the versions. `org.opencontainers.image.version` holds the matching version-specific tag, e.g. `php-8.5.13-trixie-wp7.1.5`, and `org.opencontainers.image.revision` the commit the image was built from. Images built before 2026-11-23 have only the `org.opencontainers.image.*` labels.
+`frankenpress.php.version`, `frankenpress.frankenphp.version` and `frankenpress.wordpress.version` hold the versions. `org.opencontainers.image.version` holds the dated tag of that exact build, e.g. `php-8.5-trixie-wp7.1.5-20261123-0851`, whichever tag you pulled: pin to it to keep or roll back to this image. `org.opencontainers.image.revision` holds the commit the image was built from. Images built before 2026-11-23 have only the `org.opencontainers.image.*` labels.
 
 ## Performance & Build Optimization
 

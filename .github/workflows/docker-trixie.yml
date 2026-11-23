@@ -46,7 +46,21 @@ env:
   LATEST_PHP: '8.5'
 
 jobs:
+  # One build timestamp for the whole run: the build jobs put it into the
+  # image.version label and create-manifests into the dated tag, so both
+  # match. Re-running failed jobs keeps it, so a retry doesn't publish a
+  # second dated tag for the same build.
+  build-date:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      date: ${{ steps.date.outputs.date }}
+    steps:
+      - id: date
+        run: echo "date=$(date -u +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: [build-date]
     runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-latest' || 'ubuntu-24.04-arm' }}
     strategy:
       matrix:
@@ -121,6 +135,7 @@ jobs:
           IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
           # e.g. "trixie" or "vips-ffi-trixie", as in create-manifests
           SUFFIX: ${{ matrix.variant != 'standard' && format('{0}-', matrix.variant) || '' }}trixie
+          BUILD_DATE: ${{ needs.build-date.outputs.date }}
         run: |
           set -euo pipefail
           run() { docker run --rm "$IMAGE" "$@"; }
@@ -138,8 +153,9 @@ jobs:
             echo "php=$php"
             echo "frankenphp=$frankenphp"
             echo "wordpress=$wordpress"
-            # The tag create-manifests publishes for exactly these versions
-            echo "tag=php-$php-$SUFFIX-wp$wordpress"
+            # The dated tag create-manifests publishes for this build, the
+            # most specific one (e.g. php-8.5-trixie-wp7.1.5-20261123-0851)
+            echo "tag=php-${{ matrix.php-version }}-$SUFFIX-wp$wordpress-$BUILD_DATE"
           } >> "$GITHUB_OUTPUT"
           echo "::notice title=Versions ($ARCH_TAG)::PHP $php, FrankenPHP $frankenphp, WordPress $wordpress"
 
@@ -221,7 +237,7 @@ jobs:
           tags: |
             type=raw,value=${{ env.ARCH_TAG }}
           # image.version would default to the per-architecture tag; set it to
-          # the version-specific tag instead. The frankenpress.* labels let
+          # the dated tag of this build instead. The frankenpress.* labels let
           # users check versions without pulling (see "Pinning a Version" in
           # the README); create-manifests derives its tags from them.
           labels: |
@@ -333,7 +349,7 @@ jobs:
   create-manifests:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    needs: [build]
+    needs: [build-date, build]
     strategy:
       matrix:
         php-version: ['8.5']
@@ -341,6 +357,7 @@ jobs:
     env:
       # Tag suffix shared by both registries, e.g. "trixie" or "vips-ffi-trixie"
       SUFFIX: ${{ matrix.variant != 'standard' && format('{0}-', matrix.variant) || '' }}trixie
+      BUILD_DATE: ${{ needs.build-date.outputs.date }}
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -366,7 +383,9 @@ jobs:
       # - php-8.5.13-trixie and php-8.5.13-trixie-wp7.1.2: the same for one PHP
       #   patch release (issue #54)
       # The versions come from the labels the build job set, read from the
-      # registry without pulling; both architectures must agree.
+      # registry without pulling; both architectures must agree. The build
+      # timestamp comes from the build-date job, so the dated tag matches the
+      # image.version label.
       - name: Create multi-arch manifests
         run: |
           set -euo pipefail
@@ -379,10 +398,15 @@ jobs:
           fi
           [[ "$php" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Unexpected PHP version '$php'"; exit 1; }
           [[ "$wp" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::Unexpected WordPress version '$wp'"; exit 1; }
-          build_date=$(date -u +%Y%m%d-%H%M)
-          echo "::notice title=Tags ($tag)::PHP $php, WordPress $wp, build $build_date"
+          [[ "$BUILD_DATE" =~ ^[0-9]{8}-[0-9]{4}$ ]] || { echo "::error::Unexpected build date '$BUILD_DATE'"; exit 1; }
+          dated="$tag-wp$wp-$BUILD_DATE"
+          for arch in amd64 arm64; do
+            [ "$(label $arch org.opencontainers.image.version)" = "$dated" ] \
+              || { echo "::error::The $arch image's image.version label isn't $dated"; exit 1; }
+          done
+          echo "::notice title=Tags ($tag)::PHP $php, WordPress $wp, build $BUILD_DATE"
           for repo in "${{ env.DOCKERHUB_IMAGE }}" "ghcr.io/${{ github.repository_owner }}/frankenpress"; do
-            tags=(-t "$repo:$tag" -t "$repo:$tag-wp$wp" -t "$repo:$tag-wp$wp-$build_date"
+            tags=(-t "$repo:$tag" -t "$repo:$tag-wp$wp" -t "$repo:$dated"
                   -t "$repo:php-$php-$SUFFIX" -t "$repo:php-$php-$SUFFIX-wp$wp")
             if [ "${{ matrix.php-version }}" = "$LATEST_PHP" ]; then
               # standard: trixie + latest; vips-ffi: vips-ffi-trixie + vips-ffi (same for weasyprint)
