@@ -35,7 +35,7 @@
 # -----------------------------------------------------------------------------
 # Pull WordPress core files from the official WordPress Docker image
 # This stage is used only to extract files, not run WordPress
-FROM wordpress:7.1.5@sha256:5ae5182618e8f8015f40d24a2aec4d53352bb2c7234c1b66707250edacaf44e2 AS wp
+FROM wordpress:7.1.5@sha256:2e5145737f46b8fd53f333a05eb3a4f21321c90e20475b7827082dd5f75b62b0 AS wp
 
 # -----------------------------------------------------------------------------
 # Stage 2: PHP Build
@@ -47,7 +47,7 @@ FROM wordpress:7.1.5@sha256:5ae5182618e8f8015f40d24a2aec4d53352bb2c7234c1b667072
 # into the final image.
 # Tag format: {FRANKENPHP_MAJOR}-php{VERSION}-{DEBIAN_CODENAME} (multi-arch)
 # See: https://hub.docker.com/r/dunglas/frankenphp
-FROM dunglas/frankenphp:1-php8.5-trixie@sha256:17ff6554ba6de527d17aa5ec37e2a3bc3b182d7dbea9362f9a02eb5b4a1c4b95 AS php-build
+FROM dunglas/frankenphp:1-php8.5-trixie@sha256:0b21a2960d1a2e146d283f1e3ee7ef64b3c27781e372f13457f1c41d2419be75 AS php-build
 
 # bash with pipefail, so a library without a Debian package fails the build
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
