@@ -36,7 +36,7 @@ docker compose up -d
 - `bock/frankenpress:weasyprint` / `weasyprint-trixie` - Latest WeasyPrint (PHP 8.5) on Debian Trixie (amd64, arm64)
 - `bock/frankenpress:php-8.5-weasyprint-trixie` - PHP 8.5 WeasyPrint on Debian Trixie (amd64, arm64)
 
-Every tag is also published to the GitHub Container Registry with the same digest: replace `bock/frankenpress` with `ghcr.io/bb/frankenpress`, e.g. `ghcr.io/bb/frankenpress:latest`.
+Every tag is also published to the GitHub Container Registry with the same digest: replace `bock/frankenpress` with `ghcr.io/bb/frankenpress`, e.g. `ghcr.io/bb/frankenpress:latest`. GHCR additionally has single-architecture tags ending in `-amd64` or `-arm64`. The build uses them internally to assemble the multi-arch images; don't use them, they can change or disappear without notice.
 
 All images are built on Debian 13 (Trixie) with PHP 8.5. All variants come from the same `Dockerfile`: the VIPS image is its `vips-ffi` target (`docker build --target vips-ffi .`), the WeasyPrint image its `weasyprint` target. The variants can't be combined; there is no image with both VIPS and WeasyPrint.
 

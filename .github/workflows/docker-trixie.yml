@@ -39,6 +39,11 @@ permissions:
   packages: write
 
 env:
+  # GHCR is the primary registry: the build jobs push the per-architecture
+  # images there only. create-manifests copies the finished multi-arch tags
+  # to Docker Hub, so Docker Hub sees uploads but almost no reads, which keeps
+  # the bock account clear of its pull rate limit (200 per 6 hours).
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/frankenpress
   DOCKERHUB_IMAGE: bock/frankenpress
   # PHP version that receives the unversioned tags (latest, trixie, vips-ffi, ...).
   # Keep in sync with the php-version lists below and the php-build base image
@@ -86,15 +91,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # PR builds only pull public images and never push, so they skip the
-      # logins; secrets aren't available to PRs from forks anyway.
-      - name: Login to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
+      # The build jobs push to GHCR only (see GHCR_IMAGE above), so they don't
+      # log in to Docker Hub: their pulls of public images (base images,
+      # BuildKit, test containers) are anonymous and count against the runner,
+      # not against the bock account. PR builds never push and skip the login;
+      # secrets aren't available to PRs from forks anyway.
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
@@ -115,13 +116,12 @@ jobs:
           context: .
           target: ${{ matrix.variant }}
           load: true
-          tags: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+          tags: ${{ env.GHCR_IMAGE }}:${{ env.ARCH_TAG }}
           # Each variant writes its own cache scope; the variants also read the standard
           # scope so the shared base layers are reused.
           cache-from: |
             type=gha,scope=${{ env.CACHE_SCOPE }}-standard
             type=gha,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
-            type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
           provenance: false
 
@@ -132,7 +132,7 @@ jobs:
       - name: Read versions
         id: versions
         env:
-          IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+          IMAGE: ${{ env.GHCR_IMAGE }}:${{ env.ARCH_TAG }}
           # e.g. "trixie" or "vips-ffi-trixie", as in create-manifests
           SUFFIX: ${{ matrix.variant != 'standard' && format('{0}-', matrix.variant) || '' }}trixie
           BUILD_DATE: ${{ needs.build-date.outputs.date }}
@@ -168,7 +168,7 @@ jobs:
 
       - name: Smoke test
         env:
-          IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+          IMAGE: ${{ env.GHCR_IMAGE }}:${{ env.ARCH_TAG }}
           PHP: ${{ steps.versions.outputs.php }}
           FRANKENPHP: ${{ steps.versions.outputs.frankenphp }}
         run: |
@@ -229,7 +229,7 @@ jobs:
       # Full run against WordPress + MariaDB: hardening rules, proxy handling,
       # healthcheck and image processing (see tests/integration.sh)
       - name: Integration test
-        run: tests/integration.sh "${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}" "${{ matrix.variant }}"
+        run: tests/integration.sh "${{ env.GHCR_IMAGE }}:${{ env.ARCH_TAG }}" "${{ matrix.variant }}"
 
       # Tags and labels for the push. Runs on PRs too, so the check below
       # catches label mistakes before they reach main. Labels only change the
@@ -238,9 +238,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: |
-            ${{ env.DOCKERHUB_IMAGE }}
-            ghcr.io/${{ github.repository_owner }}/frankenpress
+          images: ${{ env.GHCR_IMAGE }}
           tags: |
             type=raw,value=${{ env.ARCH_TAG }}
           # image.version would default to the per-architecture tag; set it to
@@ -294,21 +292,20 @@ jobs:
           sbom: true
 
       # Make sure what went out is what was tested: the layers of the pushed
-      # image must match those of the local one.
+      # image must match those of the local one. create-manifests copies this
+      # image to Docker Hub unchanged.
       - name: Verify the pushed image is the tested one
         if: github.event_name != 'pull_request'
         env:
-          IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+          IMAGE: ${{ env.GHCR_IMAGE }}:${{ env.ARCH_TAG }}
         run: |
           set -euo pipefail
           layers() { docker image inspect --format '{{json .RootFS.Layers}}' "$1"; }
           tested=$(layers "$IMAGE")
-          for repo in "${{ env.DOCKERHUB_IMAGE }}" "ghcr.io/${{ github.repository_owner }}/frankenpress"; do
-            docker pull -q --platform "${{ matrix.platform }}" "$repo:$ARCH_TAG" >/dev/null
-            if [ "$(layers "$repo:$ARCH_TAG")" != "$tested" ]; then
-              echo "::error::$repo:$ARCH_TAG differs from the tested image"; exit 1
-            fi
-          done
+          docker pull -q --platform "${{ matrix.platform }}" "$IMAGE" >/dev/null
+          if [ "$(layers "$IMAGE")" != "$tested" ]; then
+            echo "::error::$IMAGE differs from the tested image"; exit 1
+          fi
           echo "Pushed layers match the tested image"
 
       # Report-only: lists HIGH/CRITICAL vulnerabilities in the job summary and
@@ -319,7 +316,7 @@ jobs:
         if: matrix.platform == 'linux/amd64'
         continue-on-error: true
         env:
-          IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+          IMAGE: ${{ env.GHCR_IMAGE }}:${{ env.ARCH_TAG }}
           TRIVY: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
         run: |
           set -euo pipefail
@@ -366,10 +363,9 @@ jobs:
       # Tag suffix shared by both registries, e.g. "trixie" or "vips-ffi-trixie"
       SUFFIX: ${{ matrix.variant != 'standard' && format('{0}-', matrix.variant) || '' }}trixie
       BUILD_DATE: ${{ needs.build-date.outputs.date }}
+    # imagetools needs no builder, so there's no setup-buildx step: the
+    # runner's buildx is enough, and it would pull BuildKit from Docker Hub.
     steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
       - name: Login to Docker Hub
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -391,8 +387,12 @@ jobs:
       # - php-8.5.13-trixie-wp7.1.2-frankenphp1.14.0-caddy2.11.9-20261123-1311:
       #   one specific build (the UTC time keeps several builds on one day
       #   apart). Earlier builds used php-8.5-trixie-wp7.1.2-<date> instead.
-      # The versions come from the labels the build job set, read from the
-      # registry without pulling. The build timestamp comes from the
+      # The tags are created on GHCR from the per-architecture images there,
+      # then that exact image is copied to Docker Hub; both must end up with
+      # the same digest. Docker Hub is only written to, apart from one digest
+      # check per variant.
+      # The versions come from the labels the build job set, read from GHCR
+      # without pulling. The build timestamp comes from the
       # build-date job, so the dated tag matches the image.version label, and
       # both architectures must carry that label: it encodes every version,
       # so this also proves they agree.
@@ -400,7 +400,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="php-${{ matrix.php-version }}-$SUFFIX"
-          label() { docker buildx imagetools inspect "${{ env.DOCKERHUB_IMAGE }}:$tag-$1" --format "{{index .Image.Config.Labels \"$2\"}}"; }
+          label() { docker buildx imagetools inspect "$GHCR_IMAGE:$tag-$1" --format "{{index .Image.Config.Labels \"$2\"}}"; }
           php=$(label amd64 frankenpress.php.version)
           fp=$(label amd64 frankenpress.frankenphp.version)
           caddy=$(label amd64 frankenpress.caddy.version)
@@ -416,16 +416,26 @@ jobs:
               || { echo "::error::The $arch image's image.version label isn't $dated"; exit 1; }
           done
           echo "::notice title=Tags ($tag)::$dated"
-          for repo in "${{ env.DOCKERHUB_IMAGE }}" "ghcr.io/${{ github.repository_owner }}/frankenpress"; do
-            tags=(-t "$repo:$tag" -t "$repo:$tag-wp$wp" -t "$repo:$dated"
-                  -t "$repo:php-$php-$SUFFIX" -t "$repo:php-$php-$SUFFIX-wp$wp")
-            if [ "${{ matrix.php-version }}" = "$LATEST_PHP" ]; then
-              # standard: trixie + latest; vips-ffi: vips-ffi-trixie + vips-ffi (same for weasyprint)
-              tags+=(-t "$repo:$SUFFIX" -t "$repo:${{ matrix.variant == 'standard' && 'latest' || matrix.variant }}")
-            fi
-            docker buildx imagetools create "${tags[@]}" "$repo:$tag-amd64" "$repo:$tag-arm64"
-            docker buildx imagetools inspect "$repo:$tag"
+          names=("$tag" "$tag-wp$wp" "$dated" "php-$php-$SUFFIX" "php-$php-$SUFFIX-wp$wp")
+          if [ "${{ matrix.php-version }}" = "$LATEST_PHP" ]; then
+            # standard: trixie + latest; vips-ffi: vips-ffi-trixie + vips-ffi (same for weasyprint)
+            names+=("$SUFFIX" "${{ matrix.variant == 'standard' && 'latest' || matrix.variant }}")
+          fi
+          ghcr_tags=(); hub_tags=()
+          for n in "${names[@]}"; do
+            ghcr_tags+=(-t "$GHCR_IMAGE:$n"); hub_tags+=(-t "$DOCKERHUB_IMAGE:$n")
           done
+          docker buildx imagetools create "${ghcr_tags[@]}" "$GHCR_IMAGE:$tag-amd64" "$GHCR_IMAGE:$tag-arm64"
+          docker buildx imagetools inspect "$GHCR_IMAGE:$dated"
+          # Copy the finished multi-arch image, attestations included: the
+          # layers come from GHCR, Docker Hub only receives them
+          docker buildx imagetools create "${hub_tags[@]}" "$GHCR_IMAGE:$dated"
+          digest() { docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}'; }
+          ghcr_digest=$(digest "$GHCR_IMAGE:$dated")
+          hub_digest=$(digest "$DOCKERHUB_IMAGE:$dated")
+          [ "$ghcr_digest" = "$hub_digest" ] \
+            || { echo "::error::Docker Hub has $hub_digest, GHCR $ghcr_digest"; exit 1; }
+          echo "Published $ghcr_digest to GHCR and Docker Hub"
 
   # GitHub disables scheduled workflows after 60 days without repository
   # activity, which silently stops the weekly rebuilds that pick up PHP and

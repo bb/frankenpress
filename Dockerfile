@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # =============================================================================
 # FrankenPress - Optimized WordPress Docker Image
 # =============================================================================
@@ -18,6 +17,11 @@
 # - standard (default): WordPress on FrankenPHP
 # - vips-ffi: standard + libvips/FFI and the VIPS image editor plugin
 # - weasyprint: standard + WeasyPrint for HTML-to-PDF (e.g. CiviCRM)
+#
+# There is deliberately no "# syntax=docker/dockerfile:1" line: BuildKit's
+# built-in Dockerfile frontend supports everything used here (RUN --mount,
+# COPY --chmod, ADD --checksum), and the directive would pull the frontend
+# image from Docker Hub on every build, counting against its rate limit.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
