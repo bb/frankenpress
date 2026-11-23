@@ -89,26 +89,11 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: |
-            ${{ env.DOCKERHUB_IMAGE }}
-            ghcr.io/${{ github.repository_owner }}/frankenpress
-          tags: |
-            type=raw,value=${{ env.ARCH_TAG }}
-          labels: |
-            org.opencontainers.image.title=FrankenPress${{ matrix.variant == 'vips-ffi' && ' VIPS/FFI' || matrix.variant == 'weasyprint' && ' WeasyPrint' || '' }} (PHP ${{ matrix.php-version }} Trixie)
-            org.opencontainers.image.description=WordPress${{ matrix.variant == 'vips-ffi' && ' with VIPS and FFI' || matrix.variant == 'weasyprint' && ' with WeasyPrint for PDFs' || '' }} running on FrankenPHP with Debian Trixie
-            org.opencontainers.image.licenses=MIT
-          flavor: |
-            latest=false
-
       # Every run builds into the local Docker daemon first and tests that
       # image; the push further down only happens once the tests pass, so
       # scheduled rebuilds (new Debian packages) are tested like PRs.
-      # Attestations need a registry push, so this build has none.
+      # Attestations need a registry push, so this build has none, and the
+      # labels are only added by the push, once the versions are known.
       - name: Build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -116,7 +101,7 @@ jobs:
           context: .
           target: ${{ matrix.variant }}
           load: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
           # Each variant writes its own cache scope; the variants also read the standard
           # scope so the shared base layers are reused.
           cache-from: |
@@ -124,12 +109,45 @@ jobs:
             type=gha,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
             type=registry,ref=${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}-${{ matrix.variant }}
-          labels: ${{ steps.meta.outputs.labels }}
           provenance: false
+
+      # Versions come from the built image, not from the Dockerfile: the
+      # FrankenPHP base tag floats across PHP patch releases. They feed the
+      # security floor in the smoke test, the image labels and, through the
+      # labels, the version-specific tags in create-manifests.
+      - name: Read versions
+        id: versions
+        env:
+          IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+          # e.g. "trixie" or "vips-ffi-trixie", as in create-manifests
+          SUFFIX: ${{ matrix.variant != 'standard' && format('{0}-', matrix.variant) || '' }}trixie
+        run: |
+          set -euo pipefail
+          run() { docker run --rm "$IMAGE" "$@"; }
+          php=$(run php -r 'echo PHP_VERSION;')
+          frankenphp=$(run frankenphp version | sed -nE 's/^FrankenPHP v([0-9.]+) .*/\1/p')
+          wordpress=$(run php -r 'include "/usr/src/wordpress/wp-includes/version.php"; echo $wp_version;')
+          # Fails closed: these end up in tag names
+          [[ "$php" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$php" == "${{ matrix.php-version }}".* ]] \
+            || { echo "::error::PHP '$php' is not a ${{ matrix.php-version }}.x release"; exit 1; }
+          [[ "$frankenphp" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "::error::Unexpected FrankenPHP version '$frankenphp'"; exit 1; }
+          [[ "$wordpress" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
+            || { echo "::error::Unexpected WordPress version '$wordpress'"; exit 1; }
+          {
+            echo "php=$php"
+            echo "frankenphp=$frankenphp"
+            echo "wordpress=$wordpress"
+            # The tag create-manifests publishes for exactly these versions
+            echo "tag=php-$php-$SUFFIX-wp$wordpress"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice title=Versions ($ARCH_TAG)::PHP $php, FrankenPHP $frankenphp, WordPress $wordpress"
 
       - name: Smoke test
         env:
           IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}
+          PHP: ${{ steps.versions.outputs.php }}
+          FRANKENPHP: ${{ steps.versions.outputs.frankenphp }}
         run: |
           set -euo pipefail
           run() { docker run --rm "$IMAGE" "$@"; }
@@ -161,15 +179,12 @@ jobs:
 
           # Security floor: the FrankenPHP advisories fixed in 1.13.4 and the
           # PHP security releases of 2026-11-19 (8.5.13; 8.5.12 already fixed
-          # PHP2Shell, CVE-2026-109618/109619). Fails closed when a version
-          # can't be parsed. Raise these after the next security release.
+          # PHP2Shell, CVE-2026-109618/109619). The versions come from the
+          # "Read versions" step, which fails when one can't be parsed. Raise
+          # these after the next security release.
           at_least() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
-          fp=$(run frankenphp version)
-          echo "$fp"
-          fp_version=$(sed -nE 's/^FrankenPHP v([0-9.]+) .*/\1/p' <<<"$fp")
-          php_version=$(run php -r 'echo PHP_VERSION;')
-          at_least "$fp_version" 1.13.4 || { echo "::error::FrankenPHP '$fp_version' is older than 1.13.4"; exit 1; }
-          at_least "$php_version" 8.5.13 || { echo "::error::PHP '$php_version' is older than 8.5.13"; exit 1; }
+          at_least "$FRANKENPHP" 1.13.4 || { echo "::error::FrankenPHP '$FRANKENPHP' is older than 1.13.4"; exit 1; }
+          at_least "$PHP" 8.5.13 || { echo "::error::PHP '$PHP' is older than 8.5.13"; exit 1; }
 
           run wp --version
           grep -qx wp-config-docker.php <<<"$(run ls /usr/src/wordpress)"
@@ -192,6 +207,48 @@ jobs:
       # healthcheck and image processing (see tests/integration.sh)
       - name: Integration test
         run: tests/integration.sh "${{ env.DOCKERHUB_IMAGE }}:${{ env.ARCH_TAG }}" "${{ matrix.variant }}"
+
+      # Tags and labels for the push. Runs on PRs too, so the check below
+      # catches label mistakes before they reach main. Labels only change the
+      # image config, so the push still reuses every tested layer.
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}
+            ghcr.io/${{ github.repository_owner }}/frankenpress
+          tags: |
+            type=raw,value=${{ env.ARCH_TAG }}
+          # image.version would default to the per-architecture tag; set it to
+          # the version-specific tag instead. The frankenpress.* labels let
+          # users check versions without pulling (see "Pinning a Version" in
+          # the README); create-manifests derives its tags from them.
+          labels: |
+            org.opencontainers.image.title=FrankenPress${{ matrix.variant == 'vips-ffi' && ' VIPS/FFI' || matrix.variant == 'weasyprint' && ' WeasyPrint' || '' }} (PHP ${{ matrix.php-version }} Trixie)
+            org.opencontainers.image.description=WordPress${{ matrix.variant == 'vips-ffi' && ' with VIPS and FFI' || matrix.variant == 'weasyprint' && ' with WeasyPrint for PDFs' || '' }} running on FrankenPHP with Debian Trixie
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.version=${{ steps.versions.outputs.tag }}
+            frankenpress.php.version=${{ steps.versions.outputs.php }}
+            frankenpress.frankenphp.version=${{ steps.versions.outputs.frankenphp }}
+            frankenpress.wordpress.version=${{ steps.versions.outputs.wordpress }}
+          flavor: |
+            latest=false
+
+      # metadata-action generates its own image.version; make sure ours
+      # replaced it rather than being added next to it
+      - name: Check labels
+        env:
+          LABELS: ${{ steps.meta.outputs.labels }}
+          TAG: ${{ steps.versions.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "$LABELS"
+          versions=$(grep '^org.opencontainers.image.version=' <<<"$LABELS" || true)
+          [ "$versions" = "org.opencontainers.image.version=$TAG" ] \
+            || { echo "::error::Unexpected image.version labels: $versions"; exit 1; }
+          [ "$(grep -c '^frankenpress\.' <<<"$LABELS")" = 3 ] \
+            || { echo "::error::Version labels missing"; exit 1; }
 
       # Publish the tested image. This rebuild comes entirely from the cache
       # the build above just filled (same builder, base images pinned by
@@ -302,20 +359,31 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Besides the floating tags, publish version-specific ones so deployments
-      # can pin a build and roll back, e.g. php-8.5-trixie-wp7.1.2 (follows
-      # rebuilds of that WordPress version) and php-8.5-trixie-wp7.1.2-20261004-0112
-      # (one specific build; the UTC time keeps several builds on one day apart).
+      # can pin a build and roll back:
+      # - php-8.5-trixie-wp7.1.2: follows rebuilds of that WordPress version
+      # - php-8.5-trixie-wp7.1.2-20261004-0112: one specific build (the UTC
+      #   time keeps several builds on one day apart)
+      # - php-8.5.13-trixie and php-8.5.13-trixie-wp7.1.2: the same for one PHP
+      #   patch release (issue #54)
+      # The versions come from the labels the build job set, read from the
+      # registry without pulling; both architectures must agree.
       - name: Create multi-arch manifests
         run: |
           set -euo pipefail
           tag="php-${{ matrix.php-version }}-$SUFFIX"
-          wp=$(docker run --rm --entrypoint php "${{ env.DOCKERHUB_IMAGE }}:$tag-amd64" \
-            -r 'include "/usr/src/wordpress/wp-includes/version.php"; echo $wp_version;')
+          label() { docker buildx imagetools inspect "${{ env.DOCKERHUB_IMAGE }}:$tag-$1" --format "{{index .Image.Config.Labels \"$2\"}}"; }
+          php=$(label amd64 frankenpress.php.version)
+          wp=$(label amd64 frankenpress.wordpress.version)
+          if [ "$(label arm64 frankenpress.php.version)" != "$php" ] || [ "$(label arm64 frankenpress.wordpress.version)" != "$wp" ]; then
+            echo "::error::amd64 and arm64 images have different PHP or WordPress versions"; exit 1
+          fi
+          [[ "$php" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Unexpected PHP version '$php'"; exit 1; }
           [[ "$wp" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::Unexpected WordPress version '$wp'"; exit 1; }
           build_date=$(date -u +%Y%m%d-%H%M)
-          echo "::notice title=Tags ($tag)::WordPress $wp, build $build_date"
+          echo "::notice title=Tags ($tag)::PHP $php, WordPress $wp, build $build_date"
           for repo in "${{ env.DOCKERHUB_IMAGE }}" "ghcr.io/${{ github.repository_owner }}/frankenpress"; do
-            tags=(-t "$repo:$tag" -t "$repo:$tag-wp$wp" -t "$repo:$tag-wp$wp-$build_date")
+            tags=(-t "$repo:$tag" -t "$repo:$tag-wp$wp" -t "$repo:$tag-wp$wp-$build_date"
+                  -t "$repo:php-$php-$SUFFIX" -t "$repo:php-$php-$SUFFIX-wp$wp")
             if [ "${{ matrix.php-version }}" = "$LATEST_PHP" ]; then
               # standard: trixie + latest; vips-ffi: vips-ffi-trixie + vips-ffi (same for weasyprint)
               tags+=(-t "$repo:$SUFFIX" -t "$repo:${{ matrix.variant == 'standard' && 'latest' || matrix.variant }}")

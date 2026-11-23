@@ -44,8 +44,28 @@ All images are built on Debian 13 (Trixie) with PHP 8.5. All variants come from 
 The tags above follow the weekly rebuilds. To pin a deployment, or roll back after an update, use the version-specific tags published with every build:
 - `bock/frankenpress:php-8.5-trixie-wp7.1.2`: a specific WordPress version, still updated by the weekly rebuilds of that version
 - `bock/frankenpress:php-8.5-trixie-wp7.1.2-20261004-0112`: one specific build (WordPress version plus build date and UTC time). Builds before 2026-10-03 have only the date, e.g. `-20261002`, which the last build of that day overwrote
+- `bock/frankenpress:php-8.5.13-trixie` and `bock/frankenpress:php-8.5.13-trixie-wp7.1.5`: a specific PHP patch release, alone or with a WordPress version, still updated by the weekly rebuilds of those versions (published since 2026-11-23)
 
-The same pattern applies to the VIPS and WeasyPrint images, e.g. `php-8.5-vips-ffi-trixie-wp7.1.2-20261004-0112`. See the [tag list on Docker Hub](https://hub.docker.com/r/bock/frankenpress/tags) for available builds.
+The same pattern applies to the VIPS and WeasyPrint images, e.g. `php-8.5-vips-ffi-trixie-wp7.1.2-20261004-0112` or `php-8.5.13-vips-ffi-trixie-wp7.1.5`. See the [tag list on Docker Hub](https://hub.docker.com/r/bock/frankenpress/tags) for available builds.
+
+A pinned tag also pins PHP: an image stays on its PHP patch release until you change the tag, while `latest` and `php-8.5-trixie` move to each new release, security fixes included. Pin to know exactly what runs and to roll back, and update the pin when PHP publishes a release.
+
+#### Checking the Versions of an Image
+Each image carries labels with its PHP, FrankenPHP and WordPress versions. Read them from the registry, without pulling (a multi-arch tag needs a platform, here `linux/amd64`):
+
+```sh
+docker buildx imagetools inspect bock/frankenpress:latest \
+  --format '{{json (index .Image "linux/amd64").Config.Labels}}'
+```
+
+or from a pulled image or a running container:
+
+```sh
+docker image inspect --format '{{json .Config.Labels}}' bock/frankenpress:latest
+docker inspect --format '{{index .Config.Labels "frankenpress.php.version"}}' <container>
+```
+
+`frankenpress.php.version`, `frankenpress.frankenphp.version` and `frankenpress.wordpress.version` hold the versions. `org.opencontainers.image.version` holds the matching version-specific tag, e.g. `php-8.5.13-trixie-wp7.1.5`, and `org.opencontainers.image.revision` the commit the image was built from. Images built before 2026-11-23 have only the `org.opencontainers.image.*` labels.
 
 ## Performance & Build Optimization
 
