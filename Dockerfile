@@ -438,8 +438,11 @@ CMD ["frankenphp", "run", "--config", "/etc/caddy/Caddyfile"]
 # Build with: docker build --target vips-ffi .
 # The libvips and plugin versions are pinned at the top of this file.
 #
-# libvips is built from source with only the formats the plugin writes: JPEG,
-# PNG, GIF, WebP, HEIF/AVIF and JPEG XL. Debian's libvips42t64 also links
+# libvips is built from source with only the formats the plugin writes for
+# WordPress: JPEG, PNG, GIF, WebP and HEIF/AVIF. JPEG XL is left out as well:
+# libvips marks both its JPEG XL loader and saver untrusted, so with
+# VIPS_BLOCK_UNTRUSTED (below) they couldn't be used anyway, and WordPress
+# doesn't produce JPEG XL. Debian's libvips42t64 also links
 # OpenEXR, FITS, MATLAB/HDF5, CFITSIO, OpenSlide, librsvg, Poppler and
 # ImageMagick, none of which WordPress needs, and which brought most of the
 # VIPS image's extra CVEs. Every optional feature is disabled unless listed
@@ -472,7 +475,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libhwy-dev \
         libimagequant-dev \
         libjpeg62-turbo-dev \
-        libjxl-dev \
         liblcms2-dev \
         libspng-dev \
         libwebp-dev \
@@ -500,7 +502,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         -Dhighway=enabled \
         -Dimagequant=enabled \
         -Djpeg=enabled \
-        -Djpeg-xl=enabled \
         -Dlcms=enabled \
         -Dspng=enabled \
         -Dwebp=enabled \
@@ -532,7 +533,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # otherwise pick by sniffing file contents, bypassing imagemagick-policy.xml
 # for PDF and SVG. WordPress still renders PDF thumbnails via Imagick.
 # The source build above leaves most of those loaders out anyway; this keeps
-# the rest (e.g. JPEG XL, CSV, matrix) blocked too.
+# the rest (CSV, matrix, ...) blocked too.
 # See: https://www.libvips.org/API/current/func.block_untrusted_set.html
 ENV VIPS_BLOCK_UNTRUSTED=1
 
@@ -571,8 +572,8 @@ USER $USER_NAME
 
 # Check through the plugin's own php-vips, as the web user and with
 # VIPS_BLOCK_UNTRUSTED set, that libvips is the pinned version and that every
-# format the plugin writes encodes (AVIF via heifsave with AV1, as the plugin
-# does it) and the ones WordPress uploads decode again.
+# format WordPress uses encodes and decodes again (AVIF via heifsave with AV1,
+# as the plugin does it).
 RUN php -r ' \
     require "/usr/src/wordpress/wp-content/plugins/vips-image-editor-ffi/vendor/autoload.php"; \
     $v = Jcupitt\Vips\Config::version(); echo "libvips $v\n"; \
@@ -581,7 +582,6 @@ RUN php -r ' \
     foreach ([".jpg", ".png", ".gif", ".webp"] as $s) { \
         $b = $im->writeToBuffer($s); Jcupitt\Vips\Image::newFromBuffer($b)->avg(); echo "$s ok\n"; \
     } \
-    $im->writeToBuffer(".jxl"); echo ".jxl write ok\n"; \
     $b = $im->heifsave_buffer(["compression" => "av1"]); Jcupitt\Vips\Image::newFromBuffer($b)->avg(); echo "avif ok\n";'
 
 # -----------------------------------------------------------------------------

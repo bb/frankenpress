@@ -215,12 +215,13 @@ jobs:
           if [ "${{ matrix.variant }}" = vips-ffi ]; then
             grep -qx FFI <<<"$modules"
             # libvips is built from source (Dockerfile vips-build stage), not
-            # Debian's libvips42t64 with its OpenEXR, Poppler, ImageMagick, ... deps
+            # Debian's libvips42t64 with its OpenEXR, Poppler, ... dependencies.
+            # (ImageMagick and its libraries are there for Imagick in every variant.)
             run test -e /usr/local/lib/libvips.so.42
             if grep -qE '^ii +libvips' <<<"$(run dpkg -l)"; then
               echo "::error::Debian's libvips package is installed"; exit 1
             fi
-            for pkg in libopenexr libpoppler libmagickcore librsvg libcfitsio libmatio libopenslide; do
+            for pkg in libopenexr libpoppler librsvg libcfitsio libmatio libopenslide; do
               if grep -qE "^ii +${pkg}" <<<"$(run dpkg -l)"; then
                 echo "::error::${pkg} is installed in the VIPS image"; exit 1
               fi
