@@ -1,5 +1,7 @@
 # FrankenPress Docker Image
 
+[![Build](https://github.com/bb/frankenpress/actions/workflows/docker-trixie.yml/badge.svg?branch=main)](https://github.com/bb/frankenpress/actions/workflows/docker-trixie.yml) ![PHP](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbb%2Ffrankenpress%2Fbadges%2Fphp.json) ![WordPress](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbb%2Ffrankenpress%2Fbadges%2Fwordpress.json) ![FrankenPHP](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbb%2Ffrankenpress%2Fbadges%2Ffrankenphp.json)
+
 A WordPress image built for simplicity and scale, powered by FrankenPHP and Caddy.
 
 ## Quick Start
@@ -80,7 +82,7 @@ All arm64 builds run on native GitHub-hosted ARM runners (`ubuntu-24.04-arm`) fo
 
 The PHP extensions are compiled in a separate build stage on the official [FrankenPHP image](https://hub.docker.com/r/dunglas/frankenphp). The published image is Debian slim plus PHP, FrankenPHP and only the libraries they link against, with no compiler toolchain. That puts the standard image at about 615 MB, the VIPS image at about 680 MB and the WeasyPrint image at about 780 MB.
 
-The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by digest in the `Dockerfile`, so every build uses exactly the images recorded in git. Dependabot opens a pull request when one of them changes, and CI runs the full integration test on it before it's merged. Debian package updates in the final image still arrive with every weekly rebuild. Every build, scheduled ones included, runs the same smoke and integration tests on both architectures, and is only pushed if they pass.
+The base images (`wordpress`, `dunglas/frankenphp`, `debian`) are pinned by digest in the `Dockerfile`, so every build uses exactly the images recorded in git. Dependabot opens a pull request when one of them changes, and CI runs the full integration test on it before it's merged. A daily workflow (`wordpress-release.yml`) opens that pull request for a new WordPress release as soon as its `wordpress` image is out, and a weekly one (`bump-dependencies.yml`) does the same for new libvips and VIPS plugin releases, which are pinned by version and checksum. Debian package updates in the final image still arrive with every weekly rebuild. Every build, scheduled ones included, runs the same smoke and integration tests on both architectures, and is only pushed if they pass.
 
 ## Links
 
@@ -122,7 +124,7 @@ There is no built-in page cache. Use a caching plugin, and Redis for the object 
 
 **VIPS Images Only:**
 - FFI (Foreign Function Interface)
-- libvips (high-performance image processing)
+- libvips (high-performance image processing), built from source with only the formats the VIPS plugin uses: JPEG, PNG, GIF, WebP, HEIF/AVIF and JPEG XL
 
 **WeasyPrint Images Only:**
 - [WeasyPrint](https://weasyprint.org/) at `/usr/local/bin/weasyprint`, from PyPI (pinned with hashes in `weasyprint/requirements.txt`), with Pango and the Noto, DejaVu and FreeFont fonts. For CiviCRM, set its WeasyPrint path setting to `/usr/local/bin/weasyprint`.
@@ -408,13 +410,13 @@ When building this repository yourself, `--build-arg WITH_GHOSTSCRIPT=0` leaves 
 - **No PHP from uploads:** `.php`, `.phtml`, `.phar` and similar files under `wp-content/uploads` return 404, so a vulnerable upload form can't become remote code execution.
 - **A stolen admin session goes less far:** no code editors (`DISALLOW_FILE_EDIT`), no plugin or theme uploads and installs (`DISALLOW_PLUGIN_THEME_INSTALL`) and no application passwords (`DISABLE_APPLICATION_PASSWORDS`), all on by default. Uploading a plugin with a web shell is how a stolen admin session usually becomes code execution on the server.
 - **No private files:** hidden files and folders (`.git`, `.env`, `.htaccess`, …) and backup or log files (`*.bak`, `*.sql`, `*.log`, …) return 404. `/.well-known/` is still served.
-- **Restricted image formats:** Imagick only handles GIF, JPEG, PNG, WebP, AVIF and HEIC, plus reading PDFs for thumbnails. PostScript, SVG and ImageMagick's other formats are refused, which keeps uploads away from rarely audited parsers. In the VIPS images, `VIPS_BLOCK_UNTRUSTED=1` likewise limits libvips to its well-audited loaders, so its PDF, SVG, ImageMagick, OpenEXR, JPEG XL and other rarely audited loaders are off (PDF thumbnails still come from Imagick). libvips blocks them whenever the variable is set, whatever its value, so `VIPS_BLOCK_UNTRUSTED=0` doesn't turn this off.
+- **Restricted image formats:** Imagick only handles GIF, JPEG, PNG, WebP, AVIF and HEIC, plus reading PDFs for thumbnails. PostScript, SVG and ImageMagick's other formats are refused, which keeps uploads away from rarely audited parsers. In the VIPS images, libvips is built from source without PDF, SVG, ImageMagick, OpenEXR, FITS, MATLAB, OpenSlide and its other optional loaders, so neither they nor their libraries are in the image; Debian's libvips package pulls them all in. `VIPS_BLOCK_UNTRUSTED=1` additionally limits libvips to its well-audited loaders, which keeps the JPEG XL loader and its CSV and matrix loaders off too (PDF thumbnails still come from Imagick). libvips blocks them whenever the variable is set, whatever its value, so `VIPS_BLOCK_UNTRUSTED=0` doesn't turn this off.
 - **Security headers:** `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options` are added unless WordPress already sent them; the `Server` header is removed. HSTS is available via `HSTS`.
 - **No user enumeration through the REST API:** `/wp-json/wp/v2/users` and `/wp-json/wp/v2/users/<id>` answer only logged-in users who can write posts (`RESTRICT_REST_USERS`, on by default), also inside `/batch/v1`. Visitors no longer get the authors' login names. A proxy in front no longer needs to block these routes, which would break the block editor's author picker and @-mentions.
 - **No spoofed HTTPS:** `X-Forwarded-Proto` and `CloudFront-Forwarded-Proto` are only honoured from trusted proxies (`TRUSTED_PROXIES`) and dropped from other requests. WordPress's stock `wp-config.php` would otherwise believe any visitor claiming HTTPS.
 - **REST routes only from the URL:** WordPress would also take `rest_route` from a POST body (`POST /` with `rest_route=/batch/v1`), which reaches the REST API without `/wp-json/` or `?rest_route=` in the URL and so slips past path rules in a proxy in front. The image ignores `rest_route` in the body; `/wp-json/…` and `?rest_route=` work as before.
 - **Bounded requests:** slow clients time out, and oversized request bodies get 413 (see `TIMEOUT_*` and `REQUEST_BODY_MAX_BYTES`).
-- **Verified downloads:** WP-CLI and the VIPS plugin are pinned to releases and checked against their published checksums.
+- **Verified downloads:** WP-CLI, the libvips source and the VIPS plugin are pinned to releases and checked against their published checksums.
 - **Optional XML-RPC block:** `BLOCK_XMLRPC=1` refuses `xmlrpc.php`.
 - **No external cron triggers:** while the container runs WordPress's scheduled tasks itself (`CRON`, on by default), requests to `wp-cron.php` get 403, so nobody can trigger them from outside.
 - **Pinned base images:** every base image is pinned by digest; updates come in as Dependabot pull requests that CI tests first.
