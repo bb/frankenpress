@@ -1,0 +1,69 @@
+name: WordPress release
+
+# WordPress comes from the digest-pinned official wordpress image (Stage 1 of
+# the Dockerfile). Dependabot bumps it weekly; this checks daily so a new
+# WordPress release, often a security release, reaches the images within a
+# day. When wordpress.org offers a newer version than the Dockerfile pins and
+# the wordpress:<version> image exists, it opens a pull request updating the
+# tag and digest. If the image isn't out yet, the next day's run retries.
+#
+# Existing sites update their WordPress through its own updater either way;
+# the image only provides the core files for new sites.
+#
+# Pull requests are opened with the BUMP_PR_TOKEN secret when it is set, so
+# their build checks start; with GITHUB_TOKEN they don't (see
+# .github/scripts/open-bump-pr.sh).
+
+on:
+  schedule:
+    - cron: "30 5 * * *" # Every day at 5:30 AM UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    if: github.repository == 'bb/frankenpress'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.BUMP_PR_TOKEN || github.token }}
+
+      - name: Open a pull request if WordPress has a newer release
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_PR_TOKEN || github.token }}
+          BUMP_PR_TOKEN_SET: ${{ secrets.BUMP_PR_TOKEN != '' && '1' || '' }}
+        run: |
+          set -euo pipefail
+          current=$(sed -nE 's/^FROM wordpress:([0-9.]+)@sha256:[0-9a-f]{64} AS wp$/\1/p' Dockerfile)
+          [[ "$current" =~ ^[0-9]+(\.[0-9]+)+$ ]] || { echo "::error::No pinned wordpress:<version> stage in the Dockerfile"; exit 1; }
+          latest=$(curl -fsSL --retry 3 https://api.wordpress.org/core/version-check/1.7/ | jq -r '.offers[0].version')
+          [[ "$latest" =~ ^[0-9]+(\.[0-9]+)+$ ]] || { echo "::error::Unexpected WordPress version '${latest}'"; exit 1; }
+          if [ "$(printf '%s\n' "$current" "$latest" | sort -V | tail -n1)" = "$current" ]; then
+            echo "WordPress ${current} is current (wordpress.org offers ${latest})"; exit 0
+          fi
+
+          # One anonymous Docker Hub manifest request, not a pull
+          if ! digest=$(docker buildx imagetools inspect "wordpress:${latest}" --format '{{json .Manifest}}' | jq -r .digest); then
+            echo "::notice::WordPress ${latest} is out, but there is no wordpress:${latest} image yet"; exit 0
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Unexpected digest '${digest}'"; exit 1; }
+
+          sed -i -E \
+            -e "s/^FROM wordpress:[0-9.]+@sha256:[0-9a-f]{64} AS wp$/FROM wordpress:${latest}@${digest} AS wp/" \
+            -e "s/^(# The tags below also select the versions: WordPress )[0-9.]+,/\1${latest},/" \
+            Dockerfile
+          git diff --stat
+
+          .github/scripts/open-bump-pr.sh "bump/wordpress-${latest}" "Update WordPress to ${latest}" \
+            "$(printf '%s\n' \
+              "wordpress.org offers WordPress ${latest}; the Dockerfile pins ${current}. This updates the \`wordpress\` base image to \`wordpress:${latest}@${digest}\`." \
+              "" \
+              "- Release notes: https://wordpress.org/news/category/releases/" \
+              "- Existing sites still update through WordPress's own updater (\`wp core update\`); the image only provides the core files for new sites." \
+              "" \
+              "_Opened by the [WordPress release](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/wordpress-release.yml) workflow._")"

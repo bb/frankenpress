@@ -1,0 +1,94 @@
+name: Bump pinned releases
+
+# libvips and the vips-image-editor-ffi plugin are GitHub releases, pinned in
+# the Dockerfile with a version and the SHA-256 of the release asset
+# (VIPS_* ARGs at the top). Dependabot can't track them, so this checks the
+# latest release of each and opens a pull request bumping the version and
+# checksum when it is newer. The checksum is computed from the downloaded
+# asset and must match the digest GitHub records for it.
+#
+# Pull requests are opened with the BUMP_PR_TOKEN secret when it is set, so
+# their build checks start; with GITHUB_TOKEN they don't (see
+# .github/scripts/open-bump-pr.sh).
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Every Monday at 6 AM UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    if: github.repository == 'bb/frankenpress'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: libvips
+            repo: libvips/libvips
+            asset: vips-VERSION.tar.xz
+            version_arg: VIPS_VERSION
+            sha_arg: VIPS_SHA256
+          - name: vips-image-editor-ffi
+            repo: notglossy/vips-image-editor-ffi
+            asset: vips-image-editor-ffi-VERSION.zip
+            version_arg: VIPS_EDITOR_VERSION
+            sha_arg: VIPS_EDITOR_SHA256
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.BUMP_PR_TOKEN || github.token }}
+
+      - name: Open a pull request if ${{ matrix.name }} has a newer release
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_PR_TOKEN || github.token }}
+          BUMP_PR_TOKEN_SET: ${{ secrets.BUMP_PR_TOKEN != '' && '1' || '' }}
+          NAME: ${{ matrix.name }}
+          REPO: ${{ matrix.repo }}
+          ASSET: ${{ matrix.asset }}
+          VERSION_ARG: ${{ matrix.version_arg }}
+          SHA_ARG: ${{ matrix.sha_arg }}
+        run: |
+          set -euo pipefail
+          current=$(sed -n "s/^ARG ${VERSION_ARG}=//p" Dockerfile)
+          [ -n "$current" ] || { echo "::error::No ARG ${VERSION_ARG} in the Dockerfile"; exit 1; }
+          release=$(gh api "repos/${REPO}/releases/latest")
+          tag=$(jq -r .tag_name <<<"$release")
+          latest=${tag#v}
+
+          # The tag comes from another repository: only accept plain versions
+          if ! [[ "$latest" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            echo "::error::Unexpected release tag '${tag}' of ${REPO}"; exit 1
+          fi
+          if [ "$(printf '%s\n' "$current" "$latest" | sort -V | tail -n1)" = "$current" ]; then
+            echo "${NAME} ${current} is current (latest release ${latest})"; exit 0
+          fi
+
+          asset=${ASSET//VERSION/$latest}
+          url=$(jq -r --arg a "$asset" '.assets[] | select(.name == $a) | .browser_download_url' <<<"$release")
+          digest=$(jq -r --arg a "$asset" '.assets[] | select(.name == $a) | .digest // empty' <<<"$release")
+          [ -n "$url" ] || { echo "::error::Release ${tag} of ${REPO} has no asset ${asset}"; exit 1; }
+          [ -n "$digest" ] || { echo "::error::GitHub records no digest for ${asset}"; exit 1; }
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/asset" "$url"
+          sha256=$(sha256sum "$RUNNER_TEMP/asset" | cut -d' ' -f1)
+          [ "$digest" = "sha256:${sha256}" ] \
+            || { echo "::error::${asset} has sha256 ${sha256}, GitHub records ${digest}"; exit 1; }
+
+          sed -i -e "s/^ARG ${VERSION_ARG}=.*/ARG ${VERSION_ARG}=${latest}/" \
+                 -e "s/^ARG ${SHA_ARG}=.*/ARG ${SHA_ARG}=${sha256}/" Dockerfile
+
+          .github/scripts/open-bump-pr.sh "bump/${NAME}-${latest}" "Bump ${NAME} to ${latest}" \
+            "$(printf '%s\n' \
+              "Updates \`${NAME}\` in the \`Dockerfile\` from ${current} to ${latest}." \
+              "" \
+              "- Release notes: https://github.com/${REPO}/releases/tag/${tag}" \
+              "- \`${SHA_ARG}\`: \`${sha256}\`, computed from the downloaded \`${asset}\` and matching the digest GitHub records for it" \
+              "" \
+              "The VIPS build checks at build time that the image has this libvips version and that every format the plugin writes still encodes." \
+              "" \
+              "_Opened by the [Bump pinned releases](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/bump-dependencies.yml) workflow._")"

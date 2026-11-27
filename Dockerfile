@@ -33,6 +33,16 @@
 # at a new digest or a newer version tag appears; CI tests it before merging.
 # The tags below also select the versions: WordPress 7.1.5, FrankenPHP 1.x
 # with PHP 8.5 on Debian 13 (Trixie).
+#
+# Releases fetched from GitHub for the vips-ffi variant: libvips (built from
+# source) and the vips-image-editor-ffi WordPress plugin, each pinned with the
+# SHA-256 GitHub records for its release asset. Bump a version together with
+# its checksum; the weekly .github/workflows/bump-dependencies.yml run opens a
+# pull request doing that when a new release appears.
+ARG VIPS_VERSION=8.18.7
+ARG VIPS_SHA256=5baaead3b0bb20ffdb9e9ff09aa9fda08620923df77b63b436654cb5e0b3bf94
+ARG VIPS_EDITOR_VERSION=3.1.0
+ARG VIPS_EDITOR_SHA256=4fbfa7b1b17e8c1b618e767a9dc6308051ed0de2ab08dada6c220480e14d7771
 
 # -----------------------------------------------------------------------------
 # Stage 1: WordPress Source Files
@@ -426,32 +436,128 @@ CMD ["frankenphp", "run", "--config", "/etc/caddy/Caddyfile"]
 # the php-build stage, and installs the vips-image-editor-ffi plugin so
 # WordPress uses libvips for image processing.
 # Build with: docker build --target vips-ffi .
+# The libvips and plugin versions are pinned at the top of this file.
+#
+# libvips is built from source with only the formats the plugin writes for
+# WordPress: JPEG, PNG, GIF, WebP and HEIF/AVIF. JPEG XL is left out as well:
+# libvips marks both its JPEG XL loader and saver untrusted, so with
+# VIPS_BLOCK_UNTRUSTED (below) they couldn't be used anyway, and WordPress
+# doesn't produce JPEG XL. Debian's libvips42t64 also links
+# OpenEXR, FITS, MATLAB/HDF5, CFITSIO, OpenSlide, librsvg, Poppler and
+# ImageMagick, none of which WordPress needs, and which brought most of the
+# VIPS image's extra CVEs. Every optional feature is disabled unless listed
+# here (--auto-features=disabled).
+#
+# As in the php-build stage, the libraries libvips links against are then
+# mapped to their Debian packages (/vips-runtime-packages.txt), so the variant
+# installs exactly those and no -dev packages or compiler.
+# Must be the same Debian release as the standard stage.
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS vips-build
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG VIPS_VERSION
+ARG VIPS_SHA256
+ARG DEBIAN_FRONTEND=noninteractive
+ADD --checksum=sha256:${VIPS_SHA256} \
+    https://github.com/libvips/libvips/releases/download/v${VIPS_VERSION}/vips-${VIPS_VERSION}.tar.xz \
+    /tmp/vips.tar.xz
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ \
+        gcc \
+        meson \
+        ninja-build \
+        pkg-config \
+        xz-utils \
+        libcgif-dev \
+        libexif-dev \
+        libexpat1-dev \
+        libglib2.0-dev \
+        libheif-dev \
+        libhwy-dev \
+        libimagequant-dev \
+        libjpeg62-turbo-dev \
+        liblcms2-dev \
+        libspng-dev \
+        libwebp-dev \
+        zlib1g-dev \
+    && mkdir /usr/src/vips \
+    && tar -xJf /tmp/vips.tar.xz -C /usr/src/vips --strip-components=1 \
+    && cd /usr/src/vips \
+    && meson setup build \
+        --prefix=/usr/local \
+        --libdir=lib \
+        --buildtype=release \
+        --auto-features=disabled \
+        -Ddeprecated=false \
+        -Dexamples=false \
+        -Dcplusplus=false \
+        -Dmodules=disabled \
+        -Dintrospection=disabled \
+        -Danalyze=false \
+        -Dppm=false \
+        -Dradiance=false \
+        -Dnsgif=true \
+        -Dcgif=enabled \
+        -Dexif=enabled \
+        -Dheif=enabled \
+        -Dhighway=enabled \
+        -Dimagequant=enabled \
+        -Djpeg=enabled \
+        -Dlcms=enabled \
+        -Dspng=enabled \
+        -Dwebp=enabled \
+        -Dzlib=enabled \
+    && meson compile -C build \
+    && meson install -C build \
+    && strip --strip-unneeded /usr/local/lib/libvips.so.*.* \
+    && ldd /usr/local/lib/libvips.so.42 \
+        | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' \
+        | sort -u \
+        | while read -r lib; do \
+            dpkg -S "$(realpath "$lib")" 2>/dev/null || dpkg -S "$lib" 2>/dev/null || { echo "no package owns $lib" >&2; exit 1; }; \
+        done \
+        | sed -E 's/^diversion by ([^ ]+) (from|to): .*/\1:/' \
+        | cut -d: -f1 \
+        | sort -u > /vips-runtime-packages.txt \
+    && echo "libvips runtime packages:" && cat /vips-runtime-packages.txt
+
 FROM standard AS vips-ffi
 
 ARG USER_NAME=www-data
+ARG VIPS_VERSION
+ARG VIPS_EDITOR_VERSION
+ARG VIPS_EDITOR_SHA256
+ARG DEBIAN_FRONTEND=noninteractive
 
 # Only let libvips use its fuzzed, well-audited loaders. This blocks its
 # Poppler (PDF), librsvg (SVG) and ImageMagick loaders, which libvips would
 # otherwise pick by sniffing file contents, bypassing imagemagick-policy.xml
 # for PDF and SVG. WordPress still renders PDF thumbnails via Imagick.
+# The source build above leaves most of those loaders out anyway; this keeps
+# the rest (CSV, matrix, ...) blocked too.
 # See: https://www.libvips.org/API/current/func.block_untrusted_set.html
 ENV VIPS_BLOCK_UNTRUSTED=1
 
 USER root
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libvips42 \
-        libheif1 \
-        libaom3 \
+# libvips's runtime libraries, as found in the vips-build stage, plus the
+# libheif AV1 plugins (AVIF), which libheif loads at runtime and only
+# recommends. libvips goes to /usr/local/lib, which is on the linker path, so
+# php-vips finds libvips.so.42 by name.
+RUN --mount=type=bind,from=vips-build,source=/vips-runtime-packages.txt,target=/mnt/vips-runtime-packages.txt \
+    apt-get update && apt-get install -y --no-install-recommends \
         libheif-plugin-aomdec \
         libheif-plugin-aomenc \
+        $(cat /mnt/vips-runtime-packages.txt) \
     && rm -rf /var/cache/apt/archives \
         /var/lib/apt/lists/*
+COPY --from=vips-build /usr/local/lib/libvips.so.42* /usr/local/lib/
+RUN ldconfig
 
-# Pinned plugin release, verified against the SHA-256 GitHub records for the asset.
+# Pinned plugin release, verified against the SHA-256 GitHub records for the
+# asset. Added after libvips, so a plugin bump doesn't redo the layers above.
 # Unpacked with PHP's zip extension so the image doesn't need unzip.
-ADD --checksum=sha256:4fbfa7b1b17e8c1b618e767a9dc6308051ed0de2ab08dada6c220480e14d7771 \
-    https://github.com/notglossy/vips-image-editor-ffi/releases/download/v3.1.0/vips-image-editor-ffi-3.1.0.zip \
+ADD --checksum=sha256:${VIPS_EDITOR_SHA256} \
+    https://github.com/notglossy/vips-image-editor-ffi/releases/download/v${VIPS_EDITOR_VERSION}/vips-image-editor-ffi-${VIPS_EDITOR_VERSION}.zip \
     /tmp/vips-image-editor-ffi.zip
 RUN php -r '$z = new ZipArchive(); $z->open("/tmp/vips-image-editor-ffi.zip") === true && $z->extractTo("/usr/src/wordpress/wp-content/plugins/") || exit(1);' \
     && rm -f /tmp/vips-image-editor-ffi.zip \
@@ -463,6 +569,20 @@ RUN php -r '$z = new ZipArchive(); $z->open("/tmp/vips-image-editor-ffi.zip") ==
     } > $PHP_INI_DIR/conf.d/docker-php-ext-ffi.ini
 
 USER $USER_NAME
+
+# Check through the plugin's own php-vips, as the web user and with
+# VIPS_BLOCK_UNTRUSTED set, that libvips is the pinned version and that every
+# format WordPress uses encodes and decodes again (AVIF via heifsave with AV1,
+# as the plugin does it).
+RUN php -r ' \
+    require "/usr/src/wordpress/wp-content/plugins/vips-image-editor-ffi/vendor/autoload.php"; \
+    $v = Jcupitt\Vips\Config::version(); echo "libvips $v\n"; \
+    if ($v !== getenv("VIPS_VERSION")) { fwrite(STDERR, "expected libvips " . getenv("VIPS_VERSION") . "\n"); exit(1); } \
+    $im = Jcupitt\Vips\Image::black(64, 64, ["bands" => 3]); \
+    foreach ([".jpg", ".png", ".gif", ".webp"] as $s) { \
+        $b = $im->writeToBuffer($s); Jcupitt\Vips\Image::newFromBuffer($b)->avg(); echo "$s ok\n"; \
+    } \
+    $b = $im->heifsave_buffer(["compression" => "av1"]); Jcupitt\Vips\Image::newFromBuffer($b)->avg(); echo "avif ok\n";'
 
 # -----------------------------------------------------------------------------
 # Stage 5: WeasyPrint Variant

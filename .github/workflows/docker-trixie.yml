@@ -214,7 +214,18 @@ jobs:
 
           if [ "${{ matrix.variant }}" = vips-ffi ]; then
             grep -qx FFI <<<"$modules"
-            grep -q libvips <<<"$(run dpkg -l)"
+            # libvips is built from source (Dockerfile vips-build stage), not
+            # Debian's libvips42t64 with its OpenEXR, Poppler, ... dependencies.
+            # (ImageMagick and its libraries are there for Imagick in every variant.)
+            run test -e /usr/local/lib/libvips.so.42
+            if grep -qE '^ii +libvips' <<<"$(run dpkg -l)"; then
+              echo "::error::Debian's libvips package is installed"; exit 1
+            fi
+            for pkg in libopenexr libpoppler librsvg libcfitsio libmatio libopenslide; do
+              if grep -qE "^ii +${pkg}" <<<"$(run dpkg -l)"; then
+                echo "::error::${pkg} is installed in the VIPS image"; exit 1
+              fi
+            done
             grep -qx vips-image-editor-ffi <<<"$(run ls /usr/src/wordpress/wp-content/plugins)"
             grep -qx 1 <<<"$(run printenv VIPS_BLOCK_UNTRUSTED)"
           fi
@@ -436,6 +447,59 @@ jobs:
           [ "$ghcr_digest" = "$hub_digest" ] \
             || { echo "::error::Docker Hub has $hub_digest, GHCR $ghcr_digest"; exit 1; }
           echo "Published $ghcr_digest to GHCR and Docker Hub"
+
+  # shields.io endpoint badges for the README with the versions in the
+  # published latest image, read from its frankenpress.*.version labels on
+  # GHCR without pulling. The JSON files live on the orphan `badges` branch,
+  # so updates don't add commits to main; pushed with GITHUB_TOKEN, they
+  # don't trigger any workflow.
+  badges:
+    needs: create-manifests
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Update version badges
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          label() { docker buildx imagetools inspect "$GHCR_IMAGE:latest" --format "{{index .Image.Config.Labels \"$1\"}}"; }
+          php=$(label frankenpress.php.version)
+          wp=$(label frankenpress.wordpress.version)
+          fp=$(label frankenpress.frankenphp.version)
+          [[ "$php" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Unexpected PHP version '$php'"; exit 1; }
+          [[ "$wp" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::Unexpected WordPress version '$wp'"; exit 1; }
+          [[ "$fp" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Unexpected FrankenPHP version '$fp'"; exit 1; }
+
+          cd "$(mktemp -d)"
+          git init -q
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git"
+          if git fetch -q --depth 1 origin badges 2>/dev/null; then
+            git checkout -q -b badges FETCH_HEAD
+          else
+            git checkout -q --orphan badges
+          fi
+          # badge <file> <label> <version> <color> [<simple-icons logo>]
+          badge() {
+            jq -nc --arg l "$2" --arg m "$3" --arg c "$4" --arg logo "${5:-}" \
+              '{schemaVersion: 1, label: $l, message: $m, color: $c}
+               + (if $logo == "" then {} else {namedLogo: $logo, logoColor: "white"} end)' > "$1.json"
+          }
+          badge php PHP "$php" 777bb4 php
+          badge wordpress WordPress "$wp" 21759b wordpress
+          badge frankenphp FrankenPHP "$fp" 4b2e83
+          echo "PHP $php, WordPress $wp, FrankenPHP $fp"
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Badges unchanged"; exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "Update version badges: PHP $php, WordPress $wp, FrankenPHP $fp"
+          git push -q origin badges
 
   # GitHub disables scheduled workflows after 60 days without repository
   # activity, which silently stops the weekly rebuilds that pick up PHP and

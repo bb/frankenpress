@@ -7,9 +7,11 @@
 # is merged; the weekly scheduled rebuild still picks up Debian package
 # updates in the final stage on its own.
 #
-# WP-CLI and the VIPS plugin are pinned with checksums in the Dockerfile and
-# need a manual bump. So do the pinned PECL extensions; pecl-updates.yml opens
-# an issue when PECL has a different version.
+# libvips and the VIPS plugin get their pull requests from
+# bump-dependencies.yml, and wordpress-release.yml checks daily for a new
+# WordPress so it doesn't wait for the weekly run here. WP-CLI is pinned with
+# a checksum and needs a manual bump. So do the pinned PECL extensions;
+# pecl-updates.yml opens an issue when PECL has a different version.
 version: 2
 updates:
   - package-ecosystem: github-actions
