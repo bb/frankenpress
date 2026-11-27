@@ -191,7 +191,7 @@ docker exec $WP sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $skip_bun
 check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (web)" true "$(curl -s $B/skip.php)"
 check "CORE_UPGRADE_SKIP_NEW_BUNDLED on by default (wp-cli)" true "$(docker exec $WP wp eval "$skip_bundled" 2>/dev/null)"
 docker run -d --name $WP2 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e "WORDPRESS_CONFIG_EXTRA=define('CORE_UPGRADE_SKIP_NEW_BUNDLED', false); define('DISALLOW_FILE_EDIT', false); define('DISABLE_WP_CRON', false);" "$IMG" >/dev/null
-docker run -d --name $WP3 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e CRON=0 -e CORE_UPGRADE_SKIP_NEW_BUNDLED=0 -e DISALLOW_FILE_EDIT=0 -e DISALLOW_PLUGIN_THEME_INSTALL=0 -e DISABLE_APPLICATION_PASSWORDS=0 -e RESTRICT_REST_USERS=0 "$IMG" >/dev/null
+docker run -d --name $WP3 --network $NET -e WORDPRESS_DB_HOST=$DB -e WORDPRESS_DB_USER=wp -e WORDPRESS_DB_PASSWORD=wp -e WORDPRESS_DB_NAME=wp -e CRON=0 -e CORE_UPGRADE_SKIP_NEW_BUNDLED=0 -e DISALLOW_FILE_EDIT=0 -e DISALLOW_PLUGIN_THEME_INSTALL=0 -e DISABLE_APPLICATION_PASSWORDS=0 -e RESTRICT_REST_USERS=0 -e DISABLE_COMMENTS=1 "$IMG" >/dev/null
 for c in $WP2 $WP3; do
   for _ in $(seq 1 30); do docker exec $c curl -s -o /dev/null http://127.0.0.1/healthz 2>/dev/null && break; sleep 1; done
 done
@@ -213,6 +213,22 @@ docker exec $WP3 sh -c "echo '<?php require __DIR__ . \"/wp-load.php\"; $caps' >
 check "DISALLOW_PLUGIN_THEME_INSTALL=0 allows installs again" 1111111 "$(docker exec $WP3 curl -s http://127.0.0.1/caps.php)"
 check "DISABLE_APPLICATION_PASSWORDS=0 brings them back" sa "$(docker exec $WP3 curl -s -H 'X-Forwarded-Proto: https' http://127.0.0.1/apw.php)"
 check "RESTRICT_REST_USERS=0 lists users to visitors again" 200 "$(docker exec $WP3 curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1/?rest_route=/wp/v2/users')"
+# DISABLE_COMMENTS: off by default ($WP), =1 on $WP3. Same database, so the
+# installer's "Hello world!" post 1 with its one comment is open on $WP and
+# closed on $WP3, through the form, the REST API (even for the admin) and
+# XML-RPC pingbacks.
+cmt='echo comments_open(1) ? 1 : 0, pings_open(1) ? 1 : 0, get_comments_number(1);'
+rest_cmt='wp_set_current_user(1); $r = new WP_REST_Request("POST", "/wp/v2/comments"); $r->set_body_params(["post" => 1, "content" => "spam"]); echo rest_do_request($r)->get_status();'
+listm='<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>'
+check "comments open by default" 111 "$(docker exec $WP wp eval "$cmt" 2>/dev/null)"
+check "pingback.ping offered by default" 1 "$(curl -s -d "$listm" $B/xmlrpc.php | grep -c '>pingback.ping<')"
+check "DISABLE_COMMENTS=1 closes comments and pings, hides the count" 000 "$(docker exec $WP3 wp eval "$cmt" 2>/dev/null)"
+check "DISABLE_COMMENTS=1: comment form refused" 403 "$(docker exec $WP3 curl -s -o /dev/null -w '%{http_code}' -d 'comment_post_ID=1&author=a&email=a@example.com&comment=spam' http://127.0.0.1/wp-comments-post.php)"
+check "DISABLE_COMMENTS=1: REST comment refused, even for the admin" 403 "$(docker exec $WP3 wp eval "$rest_cmt" 2>/dev/null)"
+check "DISABLE_COMMENTS=1: no pingback.ping over XML-RPC" 0 "$(docker exec $WP3 curl -s -d "$listm" http://127.0.0.1/xmlrpc.php | grep -c '>pingback.ping<')"
+check "post page shows the comment by default" 1 "$(curl -s $B/hello-world/ | grep -q 'WordPress Commenter' && echo 1 || echo 0)"
+check "DISABLE_COMMENTS=1: post page shows no comments or form" 0 "$(docker exec $WP3 curl -s -H "Host: localhost:$PORT" http://127.0.0.1/hello-world/ | grep -cE 'WordPress Commenter|id=\"commentform\"')"
+check "DISABLE_COMMENTS=1: comment stays in wp-admin" 1 "$(docker exec $WP3 wp comment list --post_id=1 --format=count 2>/dev/null)"
 check "CRON=0: no cron runner" 0 "$(docker logs $WP3 2>&1 | grep -c 'FrankenPress: WP-Cron runs')"
 check "CRON=0: page loads run WP-Cron again (DISABLE_WP_CRON unset)" "'undefined'" "$(docker exec $WP3 wp eval "$dwc" 2>/dev/null)"
 check "CRON=0: wp-cron.php reachable" 200 "$(docker exec $WP3 curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/wp-cron.php)"

@@ -180,9 +180,10 @@ The official image's entrypoint creates `wp-config.php` from these variables and
 - `DISALLOW_PLUGIN_THEME_INSTALL`: on by default, so nobody can install or upload plugins and themes through wp-admin or the REST API, and a stolen admin session can't upload a plugin carrying a web shell. Updates (automatic and from wp-admin), activation and deletion still work. Install new plugins and themes with WP-CLI (`wp plugin install`), or set to `0` to allow it in wp-admin again
 - `DISABLE_APPLICATION_PASSWORDS`: on by default, so WordPress offers no application passwords, and a stolen admin session can't create a REST API password that outlives it. Existing application passwords stop working too. Set to `0` if an integration logs in with one
 - `RESTRICT_REST_USERS`: on by default, so the REST API's user routes (`/wp-json/wp/v2/users`, `/wp-json/wp/v2/users/<id>`) answer only logged-in users who can write posts; visitors get 401. WordPress otherwise lists every author with published posts, login name included, to anyone. The block editor's author picker and @-mentions keep working, and `/wp-json/wp/v2/users/me` stays open to every logged-in user. Set to `0` if visitors or a headless front end need the user routes
+- `DISABLE_COMMENTS`: set to `1` for sites that publish but don't want discussion, and so only get comment spam. Comments, pingbacks and trackbacks are closed on every post, whatever the post's own setting says, through the comment form, the REST API, XML-RPC and `wp-trackback.php` alike. Existing comments disappear from the front end but stay in wp-admin, where they can still be moderated or deleted. The pingback XML-RPC methods, the `X-Pingback` header and the comments feed link go too. Off by default
 - `WORDPRESS_CONFIG_EXTRA`: PHP added to `wp-config.php` when it's created, e.g. `define('WP_HOME', 'https://example.com');`
 
-`FORCE_HTTPS`, `DISALLOW_FILE_EDIT`, `DISABLE_WP_CRON`, `CORE_UPGRADE_SKIP_NEW_BUNDLED`, `DISALLOW_PLUGIN_THEME_INSTALL`, `DISABLE_APPLICATION_PASSWORDS` and `RESTRICT_REST_USERS` are applied on every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created.
+`FORCE_HTTPS`, `DISALLOW_FILE_EDIT`, `DISABLE_WP_CRON`, `CORE_UPGRADE_SKIP_NEW_BUNDLED`, `DISALLOW_PLUGIN_THEME_INSTALL`, `DISABLE_APPLICATION_PASSWORDS`, `RESTRICT_REST_USERS` and `DISABLE_COMMENTS` are applied on every request (via `auto_prepend_file`), so they also work for existing sites, whose `wp-config.php` was written when the site was created.
 
 ### WP-CLI
 
@@ -416,6 +417,7 @@ When building this repository yourself, `--build-arg WITH_GHOSTSCRIPT=0` leaves 
 - **Bounded requests:** slow clients time out, and oversized request bodies get 413 (see `TIMEOUT_*` and `REQUEST_BODY_MAX_BYTES`).
 - **Verified downloads:** WP-CLI and the VIPS plugin are pinned to releases and checked against their published checksums.
 - **Optional XML-RPC block:** `BLOCK_XMLRPC=1` refuses `xmlrpc.php`.
+- **Optional comment shutdown:** `DISABLE_COMMENTS=1` closes comments, pingbacks and trackbacks everywhere, for sites that don't use them and only get spam.
 - **No external cron triggers:** while the container runs WordPress's scheduled tasks itself (`CRON`, on by default), requests to `wp-cron.php` get 403, so nobody can trigger them from outside.
 - **Pinned base images:** every base image is pinned by digest; updates come in as Dependabot pull requests that CI tests first.
 - **Fewer libraries, fewer CVEs:** the published image has no compiler and none of ImageMagick's extra codec libraries (OpenEXR, DjVu, WMF, …).
