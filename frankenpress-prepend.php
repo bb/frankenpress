@@ -7,7 +7,8 @@
  * WordPress entrypoint writes wp-config.php only once, when a site is first
  * created. Settings in this file therefore reach new and existing sites alike.
  *
- * Switches accept 1/true/yes/on (case-insensitive); anything else is off,
+ * Switches (e.g. FORCE_HTTPS, DISABLE_COMMENTS) accept 1/true/yes/on
+ * (case-insensitive); anything else is off,
  * except DISALLOW_FILE_EDIT, CORE_UPGRADE_SKIP_NEW_BUNDLED,
  * DISALLOW_PLUGIN_THEME_INSTALL, DISABLE_APPLICATION_PASSWORDS and
  * RESTRICT_REST_USERS, which are on unless set to 0/false/no/off, and
@@ -158,6 +159,43 @@ if (!$frankenpress_disabled('RESTRICT_REST_USERS')) {
         },
         'accepted_args' => 3,
     ];
+}
+
+// DISABLE_COMMENTS, off by default; =1 turns it on: for sites that publish
+// but don't want discussion, and so get nothing but comment spam. Comments,
+// pingbacks and trackbacks are closed on every post, whatever each post's
+// own setting says. wp-comments-post.php, the REST API, XML-RPC and
+// wp-trackback.php all ask comments_open()/pings_open(), so this closes
+// every way in. Existing comments are hidden from the front end (classic
+// themes through comments_array/get_comments_number, block themes by not
+// rendering the Comments block) but stay in wp-admin, where they can still
+// be moderated or deleted. The pingback XML-RPC methods, the X-Pingback
+// header and the comments feed link go too. Priority 99, so a theme or
+// plugin opening comments at the default priority doesn't win.
+if ($frankenpress_enabled('DISABLE_COMMENTS')) {
+    $frankenpress_filters = [
+        'comments_open' => static fn (): bool => false,
+        'pings_open' => static fn (): bool => false,
+        'comments_array' => static fn (): array => [],
+        'get_comments_number' => static fn (): int => 0,
+        'render_block_core/comments' => static fn (): string => '',
+        'feed_links_show_comments_feed' => static fn (): bool => false,
+        'xmlrpc_methods' => static function ($methods) {
+            unset($methods['pingback.ping'], $methods['pingback.extensions.getPingbacks']);
+            return $methods;
+        },
+        'wp_headers' => static function ($headers) {
+            unset($headers['X-Pingback']);
+            return $headers;
+        },
+    ];
+    foreach ($frankenpress_filters as $frankenpress_hook => $frankenpress_callback) {
+        $GLOBALS['wp_filter'][$frankenpress_hook][99][] = [
+            'function' => $frankenpress_callback,
+            'accepted_args' => 1,
+        ];
+    }
+    unset($frankenpress_filters, $frankenpress_hook, $frankenpress_callback);
 }
 
 // UMASK (e.g. 0002), for sites sharing wp-content with another user through
